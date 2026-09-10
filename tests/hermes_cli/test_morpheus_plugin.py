@@ -10,6 +10,7 @@ from hermes_cli.plugins import PluginManager
 from plugins.morpheus.backlog import reconcile_backlog
 from plugins.morpheus.binding import build_project_binding
 from plugins.morpheus.spec import build_spec
+from plugins.morpheus.worker import build_isolated_worker
 from tools.registry import registry
 
 
@@ -90,6 +91,7 @@ def test_morpheus_plugin_registers_namespaced_diagnostic_when_enabled(tmp_path, 
     assert payload["capabilities"]["spec_slices"] is True
     assert payload["capabilities"]["backlog_reconcile"] is True
     assert payload["capabilities"]["project_binding"] is True
+    assert payload["capabilities"]["isolated_worker_plan"] is True
 
 
 def test_morpheus_intake_produces_separate_briefs_and_persists_glossary(tmp_path, monkeypatch):
@@ -284,3 +286,37 @@ def test_morpheus_project_binding_rejects_credential_values():
 
     with pytest.raises(ValueError, match="secret:// reference"):
         build_project_binding(args)
+
+
+def _worker_args():
+    binding = build_project_binding(_binding_args())["binding"]
+    return {
+        "authenticated_project": "synthetic-customer-a",
+        "binding": binding,
+        "run_id": "run-001",
+    }
+
+
+def test_morpheus_isolated_worker_plan_has_no_network_host_socket_or_credentials(tmp_path, monkeypatch):
+    manager = _enabled_manager(tmp_path, monkeypatch)
+
+    raw = registry.dispatch("morpheus_isolated_worker", _worker_args(), scope=manager.scope_key)
+    result = json.loads(raw)
+
+    worker = result["worker"]
+    assert worker["network"] == "none"
+    assert worker["user"] == "65532:65532"
+    assert worker["privileged"] is False
+    assert worker["docker_socket"] is False
+    assert worker["drop_capabilities"] == ["ALL"]
+    assert {mount["target"] for mount in worker["mounts"]} == {"/workspace", "/home/worker"}
+    assert "secret" not in json.dumps(worker)
+    assert result["cleanup"]["retain_authenticated_cache"] is False
+
+
+def test_morpheus_isolated_worker_rejects_a_binding_from_another_project():
+    args = _worker_args()
+    args["authenticated_project"] = "synthetic-customer-b"
+
+    with pytest.raises(PermissionError, match="does not match"):
+        build_isolated_worker(args)
