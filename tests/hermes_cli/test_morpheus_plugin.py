@@ -8,6 +8,7 @@ import pytest
 
 from hermes_cli.plugins import PluginManager
 from plugins.morpheus.backlog import reconcile_backlog
+from plugins.morpheus.binding import build_project_binding
 from plugins.morpheus.spec import build_spec
 from tools.registry import registry
 
@@ -88,6 +89,7 @@ def test_morpheus_plugin_registers_namespaced_diagnostic_when_enabled(tmp_path, 
     assert payload["plugin"] == "morpheus"
     assert payload["capabilities"]["spec_slices"] is True
     assert payload["capabilities"]["backlog_reconcile"] is True
+    assert payload["capabilities"]["project_binding"] is True
 
 
 def test_morpheus_intake_produces_separate_briefs_and_persists_glossary(tmp_path, monkeypatch):
@@ -229,3 +231,56 @@ def test_morpheus_backlog_reconciliation_rejects_duplicate_source_ids():
             "project": "BPT",
             "items": [_backlog_items()[0], _backlog_items()[0]],
         })
+
+
+def _binding_args():
+    return {
+        "authenticated_project": "synthetic-customer-a",
+        "requested_project": "synthetic-customer-a",
+        "repository": "oromulomartins/hermes-agent",
+        "jira_project": "BPT",
+        "secret_refs": {"github": "secret://synthetic-customer-a/github"},
+    }
+
+
+def test_morpheus_project_binding_uses_local_docker_and_private_paths(tmp_path, monkeypatch):
+    manager = _enabled_manager(tmp_path, monkeypatch)
+
+    raw = registry.dispatch("morpheus_project_binding", _binding_args(), scope=manager.scope_key)
+    result = json.loads(raw)
+
+    binding = result["binding"]
+    assert binding["runtime"] == {
+        "kind": "docker-local",
+        "container_name": binding["runtime"]["container_name"],
+        "network": "none",
+        "read_only_root_filesystem": True,
+    }
+    assert binding["runtime"]["container_name"].startswith("morpheus-synthetic-customer-a-")
+    assert "synthetic-customer-a" in binding["storage"]["workspace"]
+    assert binding["secret_refs"] == {"github": "secret://synthetic-customer-a/github"}
+    assert result["policy"]["external_provisioning"] is False
+
+    other_args = _binding_args()
+    other_args["authenticated_project"] = "synthetic-customer-b"
+    other_args["requested_project"] = "synthetic-customer-b"
+    other = build_project_binding(other_args)["binding"]
+
+    assert other["runtime"]["container_name"] != binding["runtime"]["container_name"]
+    assert other["storage"] != binding["storage"]
+
+
+def test_morpheus_project_binding_rejects_a_conflicting_requested_project():
+    args = _binding_args()
+    args["requested_project"] = "synthetic-customer-b"
+
+    with pytest.raises(PermissionError, match="does not match"):
+        build_project_binding(args)
+
+
+def test_morpheus_project_binding_rejects_credential_values():
+    args = _binding_args()
+    args["secret_refs"] = {"github": "ghp-not-a-reference"}
+
+    with pytest.raises(ValueError, match="secret:// reference"):
+        build_project_binding(args)
