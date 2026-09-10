@@ -10,11 +10,13 @@ import json
 from typing import Any
 
 from .intake import build_intake_brief
+from .spec import build_spec
 
 
 _DIAGNOSTIC_TOOL_NAME = "morpheus_status"
 _DIAGNOSTIC_COMMAND_NAME = "morpheus-status"
 _INTAKE_TOOL_NAME = "morpheus_intake_brief"
+_SPEC_TOOL_NAME = "morpheus_spec_slices"
 
 
 def _status_payload() -> dict[str, Any]:
@@ -24,6 +26,7 @@ def _status_payload() -> dict[str, Any]:
         "capabilities": {
             "diagnostic": True,
             "intake_brief": True,
+            "spec_slices": True,
             "scheduler": False,
             "worker": False,
             "kanban_adapter": "unconfigured",
@@ -51,6 +54,10 @@ def _intake_tool(args: dict[str, Any], **__: Any) -> str:
     return json.dumps(build_intake_brief(args), sort_keys=True)
 
 
+def _spec_tool(args: dict[str, Any], **__: Any) -> str:
+    return json.dumps(build_spec(args), sort_keys=True)
+
+
 def register(ctx: Any) -> None:
     ctx.register_tool(
         name=_DIAGNOSTIC_TOOL_NAME,
@@ -58,11 +65,7 @@ def register(ctx: Any) -> None:
         schema={
             "name": _DIAGNOSTIC_TOOL_NAME,
             "description": "Report the enabled Morpheus plugin capabilities without starting work.",
-            "parameters": {
-                "type": "object",
-                "properties": {},
-                "additionalProperties": False,
-            },
+            "parameters": {"type": "object", "properties": {}, "additionalProperties": False},
         },
         handler=_diagnostic_tool,
         description="Morpheus compatibility and capability diagnostic.",
@@ -93,6 +96,32 @@ def register(ctx: Any) -> None:
         },
         handler=_intake_tool,
         description="Morpheus deterministic intake brief generator.",
+    )
+    ctx.register_tool(
+        name=_SPEC_TOOL_NAME,
+        toolset="debugging",
+        schema={
+            "name": _SPEC_TOOL_NAME,
+            "description": (
+                "Convert an explicitly approved intake brief into a traceable spec "
+                "and acyclic vertical slices."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "brief": {"type": "object"},
+                    "decision": {"type": "object"},
+                    "behavior": {"type": "string"},
+                    "public_test_limits": {"type": "string"},
+                    "skill_lock": {"type": "object"},
+                    "slices": {"type": "array", "items": {"type": "object"}},
+                },
+                "required": ["brief", "decision", "behavior", "public_test_limits", "skill_lock", "slices"],
+                "additionalProperties": False,
+            },
+        },
+        handler=_spec_tool,
+        description="Morpheus approved-brief spec and slice DAG generator.",
     )
     ctx.register_command(
         _DIAGNOSTIC_COMMAND_NAME,
