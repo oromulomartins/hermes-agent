@@ -10,6 +10,7 @@ import json
 from typing import Any
 
 from .backlog import reconcile_backlog
+from .binding import build_project_binding
 from .intake import build_intake_brief
 from .spec import build_spec
 
@@ -19,6 +20,7 @@ _DIAGNOSTIC_COMMAND_NAME = "morpheus-status"
 _INTAKE_TOOL_NAME = "morpheus_intake_brief"
 _SPEC_TOOL_NAME = "morpheus_spec_slices"
 _BACKLOG_TOOL_NAME = "morpheus_backlog_reconcile"
+_PROJECT_BINDING_TOOL_NAME = "morpheus_project_binding"
 
 
 def _status_payload() -> dict[str, Any]:
@@ -30,6 +32,7 @@ def _status_payload() -> dict[str, Any]:
             "intake_brief": True,
             "spec_slices": True,
             "backlog_reconcile": True,
+            "project_binding": True,
             "scheduler": False,
             "worker": False,
             "kanban_adapter": "unconfigured",
@@ -63,6 +66,10 @@ def _spec_tool(args: dict[str, Any], **__: Any) -> str:
 
 def _backlog_tool(args: dict[str, Any], **__: Any) -> str:
     return json.dumps(reconcile_backlog(args), sort_keys=True)
+
+
+def _project_binding_tool(args: dict[str, Any], **__: Any) -> str:
+    return json.dumps(build_project_binding(args), sort_keys=True)
 
 
 def register(ctx: Any) -> None:
@@ -153,6 +160,32 @@ def register(ctx: Any) -> None:
         },
         handler=_backlog_tool,
         description="Morpheus idempotent backlog reconciliation planner.",
+    )
+    ctx.register_tool(
+        name=_PROJECT_BINDING_TOOL_NAME,
+        toolset="debugging",
+        schema={
+            "name": _PROJECT_BINDING_TOOL_NAME,
+            "description": (
+                "Build a fail-closed local Docker project binding. The requested "
+                "project must match the authenticated project, and secrets are references only."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "authenticated_project": {"type": "string"},
+                    "requested_project": {"type": "string"},
+                    "repository": {"type": "string"},
+                    "jira_project": {"type": "string"},
+                    "runtime": {"type": "string", "enum": ["docker-local"]},
+                    "secret_refs": {"type": "object", "additionalProperties": {"type": "string"}},
+                },
+                "required": ["authenticated_project", "requested_project", "repository", "jira_project"],
+                "additionalProperties": False,
+            },
+        },
+        handler=_project_binding_tool,
+        description="Morpheus local Docker project-binding contract.",
     )
     ctx.register_command(
         _DIAGNOSTIC_COMMAND_NAME,
