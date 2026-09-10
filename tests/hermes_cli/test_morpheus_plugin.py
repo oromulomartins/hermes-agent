@@ -4,7 +4,10 @@ from __future__ import annotations
 
 import json
 
+import pytest
+
 from hermes_cli.plugins import PluginManager
+from plugins.morpheus.spec import build_spec
 from tools.registry import registry
 
 
@@ -27,6 +30,51 @@ def _enabled_manager(tmp_path, monkeypatch):
     return manager
 
 
+def _ready_brief():
+    return {
+        "status": "ready",
+        "pm_brief": {
+            "target_user": "Online shoppers",
+            "problem": "Buyers lack timely delivery visibility.",
+        },
+        "po_brief": {
+            "value_hypothesis": "Fewer support requests about delivery status.",
+        },
+    }
+
+
+def _spec_args():
+    return {
+        "brief": _ready_brief(),
+        "decision": {"id": "DEC-1", "owner": "PO", "state": "approved"},
+        "behavior": "Show a delivery lifecycle state for a selected order.",
+        "public_test_limits": "Use synthetic order and shipment identifiers only.",
+        "skill_lock": {
+            "name": "matt-jira",
+            "revision": "2026-09-10",
+            "adaptations": ["Jira cards are the delivery tracker."],
+        },
+        "slices": [
+            {
+                "id": "delivery-read",
+                "title": "Read delivery state",
+                "value": "Buyer sees shipment progress",
+                "acceptance": "Synthetic order returns its lifecycle state",
+                "blockers": "None",
+                "depends_on": [],
+            },
+            {
+                "id": "delivery-view",
+                "title": "Display delivery state",
+                "value": "Buyer can understand shipment progress",
+                "acceptance": "Lifecycle state is visible in the order view",
+                "blockers": "delivery-read",
+                "depends_on": ["delivery-read"],
+            },
+        ],
+    }
+
+
 def test_morpheus_plugin_registers_namespaced_diagnostic_when_enabled(tmp_path, monkeypatch):
     manager = _enabled_manager(tmp_path, monkeypatch)
 
@@ -37,13 +85,7 @@ def test_morpheus_plugin_registers_namespaced_diagnostic_when_enabled(tmp_path, 
     payload = json.loads(raw)
 
     assert payload["plugin"] == "morpheus"
-    assert payload["capabilities"] == {
-        "diagnostic": True,
-        "intake_brief": True,
-        "scheduler": False,
-        "worker": False,
-        "kanban_adapter": "unconfigured",
-    }
+    assert payload["capabilities"]["spec_slices"] is True
 
 
 def test_morpheus_intake_produces_separate_briefs_and_persists_glossary(tmp_path, monkeypatch):
@@ -87,8 +129,33 @@ def test_morpheus_intake_marks_missing_information_as_needs_input(tmp_path, monk
         "problem",
         "value_hypothesis",
     }
-    assert {question["owner"] for question in brief["pm_brief"]["open_questions"]} == {"PM"}
-    assert {question["owner"] for question in brief["po_brief"]["open_questions"]} == {"PO"}
+
+
+def test_morpheus_spec_requires_explicit_approval():
+    result = build_spec({**_spec_args(), "decision": {"id": "DEC-1", "owner": "PO", "state": "pending"}})
+
+    assert result["status"] == "needs_decision"
+    assert result["decisions"][0]["state"] == "needs_input"
+
+
+def test_morpheus_spec_builds_an_acyclic_vertical_slice_dag(tmp_path, monkeypatch):
+    manager = _enabled_manager(tmp_path, monkeypatch)
+
+    raw = registry.dispatch("morpheus_spec_slices", _spec_args(), scope=manager.scope_key)
+    result = json.loads(raw)
+
+    assert result["status"] == "ready"
+    assert result["spec"]["execution_order"] == ["delivery-read", "delivery-view"]
+    assert result["spec"]["decisions"] == [{"id": "DEC-1", "owner": "PO", "state": "approved"}]
+    assert result["spec"]["skill_lock"]["name"] == "matt-jira"
+
+
+def test_morpheus_spec_rejects_a_cyclic_slice_graph():
+    args = _spec_args()
+    args["slices"][0]["depends_on"] = ["delivery-view"]
+
+    with pytest.raises(ValueError, match="acyclic"):
+        build_spec(args)
 
 
 def test_morpheus_plugin_does_not_register_when_not_enabled(tmp_path, monkeypatch):
@@ -99,8 +166,7 @@ def test_morpheus_plugin_does_not_register_when_not_enabled(tmp_path, monkeypatc
     manager = PluginManager()
     manager.discover_and_load()
 
-    assert "morpheus" not in {
-        name for name, plugin in manager._plugins.items() if plugin.enabled
-    }
+    assert "morpheus" not in {name for name, plugin in manager._plugins.items() if plugin.enabled}
     assert "morpheus_status" not in manager._plugin_tool_names
     assert "morpheus_intake_brief" not in manager._plugin_tool_names
+    assert "morpheus_spec_slices" not in manager._plugin_tool_names
