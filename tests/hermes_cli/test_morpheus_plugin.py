@@ -256,9 +256,18 @@ def test_morpheus_project_binding_uses_local_docker_and_private_paths(tmp_path, 
         "network": "none",
         "read_only_root_filesystem": True,
     }
+    assert binding["runtime"]["container_name"].startswith("morpheus-synthetic-customer-a-")
     assert "synthetic-customer-a" in binding["storage"]["workspace"]
     assert binding["secret_refs"] == {"github": "secret://synthetic-customer-a/github"}
     assert result["policy"]["external_provisioning"] is False
+
+    other_args = _binding_args()
+    other_args["authenticated_project"] = "synthetic-customer-b"
+    other_args["requested_project"] = "synthetic-customer-b"
+    other = build_project_binding(other_args)["binding"]
+
+    assert other["runtime"]["container_name"] != binding["runtime"]["container_name"]
+    assert other["storage"] != binding["storage"]
 
 
 def test_morpheus_project_binding_rejects_a_conflicting_requested_project():
