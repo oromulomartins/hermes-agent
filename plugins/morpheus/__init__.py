@@ -18,6 +18,7 @@ _DIAGNOSTIC_TOOL_NAME = "morpheus_status"
 _DIAGNOSTIC_COMMAND_NAME = "morpheus-status"
 _INTAKE_TOOL_NAME = "morpheus_intake_brief"
 _SPEC_TOOL_NAME = "morpheus_spec_slices"
+_BACKLOG_TOOL_NAME = "morpheus_backlog_reconcile"
 
 
 def _status_payload() -> dict[str, Any]:
