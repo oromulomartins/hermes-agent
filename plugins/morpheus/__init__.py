@@ -13,6 +13,7 @@ from .backlog import reconcile_backlog
 from .binding import build_project_binding
 from .intake import build_intake_brief
 from .spec import build_spec
+from .worker import build_isolated_worker
 
 
 _DIAGNOSTIC_TOOL_NAME = "morpheus_status"
@@ -21,6 +22,7 @@ _INTAKE_TOOL_NAME = "morpheus_intake_brief"
 _SPEC_TOOL_NAME = "morpheus_spec_slices"
 _BACKLOG_TOOL_NAME = "morpheus_backlog_reconcile"
 _PROJECT_BINDING_TOOL_NAME = "morpheus_project_binding"
+_ISOLATED_WORKER_TOOL_NAME = "morpheus_isolated_worker"
 
 
 def _status_payload() -> dict[str, Any]:
@@ -33,6 +35,7 @@ def _status_payload() -> dict[str, Any]:
             "spec_slices": True,
             "backlog_reconcile": True,
             "project_binding": True,
+            "isolated_worker_plan": True,
             "scheduler": False,
             "worker": False,
             "kanban_adapter": "unconfigured",
@@ -70,6 +73,10 @@ def _backlog_tool(args: dict[str, Any], **__: Any) -> str:
 
 def _project_binding_tool(args: dict[str, Any], **__: Any) -> str:
     return json.dumps(build_project_binding(args), sort_keys=True)
+
+
+def _isolated_worker_tool(args: dict[str, Any], **__: Any) -> str:
+    return json.dumps(build_isolated_worker(args), sort_keys=True)
 
 
 def register(ctx: Any) -> None:
@@ -186,6 +193,29 @@ def register(ctx: Any) -> None:
         },
         handler=_project_binding_tool,
         description="Morpheus local Docker project-binding contract.",
+    )
+    ctx.register_tool(
+        name=_ISOLATED_WORKER_TOOL_NAME,
+        toolset="debugging",
+        schema={
+            "name": _ISOLATED_WORKER_TOOL_NAME,
+            "description": (
+                "Build a fail-closed plan for a disposable local Docker worker. "
+                "It does not start a container or expose credentials."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "authenticated_project": {"type": "string"},
+                    "binding": {"type": "object"},
+                    "run_id": {"type": "string"},
+                },
+                "required": ["authenticated_project", "binding", "run_id"],
+                "additionalProperties": False,
+            },
+        },
+        handler=_isolated_worker_tool,
+        description="Morpheus disposable local Docker worker plan.",
     )
     ctx.register_command(
         _DIAGNOSTIC_COMMAND_NAME,
