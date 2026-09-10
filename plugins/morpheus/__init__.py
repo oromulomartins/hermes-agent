@@ -1,7 +1,7 @@
 """Opt-in Morpheus plugin for Hermes Agent.
 
-The plugin only exposes a namespaced diagnostic surface. It does not start
-workers, schedules, or external integrations during discovery.
+The plugin exposes namespaced workflow surfaces. Discovery never starts workers,
+schedules, or external integrations.
 """
 
 from __future__ import annotations
@@ -9,9 +9,12 @@ from __future__ import annotations
 import json
 from typing import Any
 
+from .intake import build_intake_brief
+
 
 _DIAGNOSTIC_TOOL_NAME = "morpheus_status"
 _DIAGNOSTIC_COMMAND_NAME = "morpheus-status"
+_INTAKE_TOOL_NAME = "morpheus_intake_brief"
 
 
 def _status_payload() -> dict[str, Any]:
@@ -20,6 +23,7 @@ def _status_payload() -> dict[str, Any]:
         "enabled": True,
         "capabilities": {
             "diagnostic": True,
+            "intake_brief": True,
             "scheduler": False,
             "worker": False,
             "kanban_adapter": "unconfigured",
@@ -43,6 +47,10 @@ def _diagnostic_command(_: str) -> str:
     )
 
 
+def _intake_tool(args: dict[str, Any], **__: Any) -> str:
+    return json.dumps(build_intake_brief(args), sort_keys=True)
+
+
 def register(ctx: Any) -> None:
     ctx.register_tool(
         name=_DIAGNOSTIC_TOOL_NAME,
@@ -58,6 +66,33 @@ def register(ctx: Any) -> None:
         },
         handler=_diagnostic_tool,
         description="Morpheus compatibility and capability diagnostic.",
+    )
+    ctx.register_tool(
+        name=_INTAKE_TOOL_NAME,
+        toolset="debugging",
+        schema={
+            "name": _INTAKE_TOOL_NAME,
+            "description": (
+                "Create deterministic PM and PO intake briefs. Missing information "
+                "becomes explicit needs_input questions instead of inferred requirements."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "project": {"type": "string"},
+                    "demand": {"type": "string"},
+                    "target_user": {"type": "string"},
+                    "problem": {"type": "string"},
+                    "value_hypothesis": {"type": "string"},
+                    "constraints": {"type": "array", "items": {"type": "string"}},
+                    "terms": {"type": "object", "additionalProperties": {"type": "string"}},
+                },
+                "required": ["project", "demand"],
+                "additionalProperties": False,
+            },
+        },
+        handler=_intake_tool,
+        description="Morpheus deterministic intake brief generator.",
     )
     ctx.register_command(
         _DIAGNOSTIC_COMMAND_NAME,
