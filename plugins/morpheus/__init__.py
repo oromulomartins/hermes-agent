@@ -9,6 +9,7 @@ from __future__ import annotations
 import json
 from typing import Any
 
+from .backlog import reconcile_backlog
 from .intake import build_intake_brief
 from .spec import build_spec
 
@@ -27,6 +28,7 @@ def _status_payload() -> dict[str, Any]:
             "diagnostic": True,
             "intake_brief": True,
             "spec_slices": True,
+            "backlog_reconcile": True,
             "scheduler": False,
             "worker": False,
             "kanban_adapter": "unconfigured",
@@ -56,6 +58,10 @@ def _intake_tool(args: dict[str, Any], **__: Any) -> str:
 
 def _spec_tool(args: dict[str, Any], **__: Any) -> str:
     return json.dumps(build_spec(args), sort_keys=True)
+
+
+def _backlog_tool(args: dict[str, Any], **__: Any) -> str:
+    return json.dumps(reconcile_backlog(args), sort_keys=True)
 
 
 def register(ctx: Any) -> None:
@@ -122,6 +128,30 @@ def register(ctx: Any) -> None:
         },
         handler=_spec_tool,
         description="Morpheus approved-brief spec and slice DAG generator.",
+    )
+    ctx.register_tool(
+        name=_BACKLOG_TOOL_NAME,
+        toolset="debugging",
+        schema={
+            "name": _BACKLOG_TOOL_NAME,
+            "description": (
+                "Plan an idempotent backlog reconciliation within one bound Jira project "
+                "without performing remote writes."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "bound_project": {"type": "string"},
+                    "project": {"type": "string"},
+                    "items": {"type": "array", "items": {"type": "object"}},
+                    "existing_items": {"type": "array", "items": {"type": "object"}},
+                },
+                "required": ["bound_project", "project", "items"],
+                "additionalProperties": False,
+            },
+        },
+        handler=_backlog_tool,
+        description="Morpheus idempotent backlog reconciliation planner.",
     )
     ctx.register_command(
         _DIAGNOSTIC_COMMAND_NAME,
