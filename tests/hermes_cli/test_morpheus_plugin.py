@@ -9,6 +9,7 @@ import pytest
 from hermes_cli.plugins import PluginManager
 from plugins.morpheus.backlog import reconcile_backlog
 from plugins.morpheus.binding import build_project_binding
+from plugins.morpheus.memory import build_private_memory
 from plugins.morpheus.spec import build_spec
 from plugins.morpheus.worker import build_isolated_worker
 from tools.registry import registry
@@ -92,6 +93,7 @@ def test_morpheus_plugin_registers_namespaced_diagnostic_when_enabled(tmp_path, 
     assert payload["capabilities"]["backlog_reconcile"] is True
     assert payload["capabilities"]["project_binding"] is True
     assert payload["capabilities"]["isolated_worker_plan"] is True
+    assert payload["capabilities"]["private_project_memory"] is True
 
 
 def test_morpheus_intake_produces_separate_briefs_and_persists_glossary(tmp_path, monkeypatch):
@@ -320,3 +322,87 @@ def test_morpheus_isolated_worker_rejects_a_binding_from_another_project():
 
     with pytest.raises(PermissionError, match="does not match"):
         build_isolated_worker(args)
+
+
+def _private_memory_args():
+    return {
+        "authenticated_project": "synthetic-customer-a",
+        "binding": build_project_binding(_binding_args())["binding"],
+    }
+
+
+def test_morpheus_private_memory_persists_memory_and_project_artifact_handoffs(tmp_path, monkeypatch):
+    manager = _enabled_manager(tmp_path, monkeypatch)
+    args = _private_memory_args()
+
+    memory = json.loads(registry.dispatch(
+        "morpheus_project_memory",
+        {
+            **args,
+            "operation": "append",
+            "writer_id": "writer-001",
+            "record": {
+                "kind": "memory",
+                "summary": "Synthetic order identifiers require redaction before a handoff.",
+                "artifact_refs": ["notes/redaction.md"],
+            },
+        },
+        scope=manager.scope_key,
+    ))
+    handoff = json.loads(registry.dispatch(
+        "morpheus_project_memory",
+        {
+            **args,
+            "operation": "append",
+            "writer_id": "writer-002",
+            "record": {
+                "kind": "handoff",
+                "summary": "Continue with the synthetic redaction test case.",
+                "artifact_refs": ["handoffs/run-001.json"],
+            },
+        },
+        scope=manager.scope_key,
+    ))
+    recovered = build_private_memory({**args, "operation": "read"})
+
+    assert [record["kind"] for record in recovered["records"]] == ["memory", "handoff"]
+    assert "writer-001" in memory["coordination"]["writer_home"]
+    assert handoff["records"][-1]["artifact_refs"] == ["handoffs/run-001.json"]
+    assert recovered["coordination"]["shared_between_projects"] is False
+
+
+def test_morpheus_private_memory_never_returns_another_projects_records(tmp_path, monkeypatch):
+    _enabled_manager(tmp_path, monkeypatch)
+    first = _private_memory_args()
+    build_private_memory({
+        **first,
+        "operation": "append",
+        "writer_id": "writer-001",
+        "record": {
+            "kind": "memory",
+            "summary": "Synthetic customer A only.",
+            "artifact_refs": ["notes/a.md"],
+        },
+    })
+    other_binding_args = _binding_args()
+    other_binding_args["authenticated_project"] = "synthetic-customer-b"
+    other_binding_args["requested_project"] = "synthetic-customer-b"
+    second = {
+        "authenticated_project": "synthetic-customer-b",
+        "binding": build_project_binding(other_binding_args)["binding"],
+        "operation": "read",
+    }
+
+    recovered = build_private_memory(second)
+
+    assert recovered["records"] == []
+    assert recovered["project_id"] == "synthetic-customer-b"
+
+
+def test_morpheus_private_memory_rejects_a_binding_from_another_project():
+    args = _private_memory_args()
+    args["authenticated_project"] = "synthetic-customer-b"
+    args["operation"] = "read"
+
+    with pytest.raises(PermissionError, match="does not match"):
+        build_private_memory(args)
