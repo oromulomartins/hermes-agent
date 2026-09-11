@@ -15,6 +15,7 @@ from plugins.morpheus.memory import build_private_memory
 from plugins.morpheus.onboarding import build_repository_onboarding
 from plugins.morpheus.isolation import run_tenant_isolation_proof
 from plugins.morpheus.spec import build_spec
+from plugins.morpheus.supervisor import manage_durable_run
 from plugins.morpheus.worker import build_isolated_worker
 from tools.registry import registry
 
@@ -101,6 +102,7 @@ def test_morpheus_plugin_registers_namespaced_diagnostic_when_enabled(tmp_path, 
     assert payload["capabilities"]["scoped_tool_grant"] is True
     assert payload["capabilities"]["repository_onboarding"] is True
     assert payload["capabilities"]["tenant_isolation_proof"] is True
+    assert payload["capabilities"]["durable_run_supervisor"] is True
 
 
 def test_morpheus_intake_produces_separate_briefs_and_persists_glossary(tmp_path, monkeypatch):
@@ -570,3 +572,88 @@ def test_morpheus_tenant_isolation_proof_revokes_grants_and_blocks_new_claims(tm
     result = run_tenant_isolation_proof(_isolation_proof_args())
 
     assert result["kill_switch"] == {"new_claims": "denied", "revoked_grant_count": 2}
+
+
+def _durable_run_args():
+    return {
+        "project_id": "synthetic-customer-a",
+        "repository": "oromulomartins/hermes-agent",
+        "task_id": "synthetic-task-001",
+        "worker_id": "worker-a",
+        "now_epoch": 100,
+    }
+
+
+def test_morpheus_durable_run_allows_only_one_active_writer_and_fences_expired_workers(tmp_path, monkeypatch):
+    manager = _enabled_manager(tmp_path, monkeypatch)
+    args = _durable_run_args()
+    claimed = json.loads(registry.dispatch(
+        "morpheus_durable_run", {**args, "operation": "claim", "lease_seconds": 10}, scope=manager.scope_key
+    ))
+    concurrent = manage_durable_run({
+        **args,
+        "operation": "claim",
+        "worker_id": "worker-b",
+        "now_epoch": 101,
+        "lease_seconds": 10,
+    })
+    expired_publish = manage_durable_run({
+        **args,
+        "operation": "publish",
+        "now_epoch": 110,
+        "fencing_token": claimed["claim"]["fencing_token"],
+        "spec_sha": "a" * 40,
+        "head_sha": "b" * 40,
+    })
+    replacement = manage_durable_run({
+        **args,
+        "operation": "claim",
+        "worker_id": "worker-b",
+        "now_epoch": 110,
+        "lease_seconds": 10,
+    })
+
+    assert claimed["status"] == "claimed"
+    assert concurrent["reason"] == "already_claimed"
+    assert expired_publish == {"status": "denied", "reason": "worker_expired"}
+    assert replacement["claim"]["fencing_token"] == claimed["claim"]["fencing_token"] + 1
+
+
+def test_morpheus_durable_run_resumes_after_matching_checkpoint_and_detects_mismatch(tmp_path, monkeypatch):
+    _enabled_manager(tmp_path, monkeypatch)
+    args = _durable_run_args()
+    claim = manage_durable_run({**args, "operation": "claim", "lease_seconds": 20})["claim"]
+    before = manage_durable_run({
+        **args,
+        "operation": "resume",
+        "fencing_token": claim["fencing_token"],
+        "spec_sha": "a" * 40,
+        "head_sha": "b" * 40,
+    })
+    checkpoint = manage_durable_run({
+        **args,
+        "operation": "checkpoint",
+        "fencing_token": claim["fencing_token"],
+        "spec_sha": "a" * 40,
+        "head_sha": "b" * 40,
+    })
+    after = manage_durable_run({
+        **args,
+        "operation": "resume",
+        "fencing_token": claim["fencing_token"],
+        "spec_sha": "a" * 40,
+        "head_sha": "b" * 40,
+    })
+    mismatch = manage_durable_run({
+        **args,
+        "operation": "resume",
+        "fencing_token": claim["fencing_token"],
+        "spec_sha": "c" * 40,
+        "head_sha": "b" * 40,
+    })
+
+    assert before == {"status": "resume_required", "resume_from": "before_checkpoint", "verified": False}
+    assert checkpoint["status"] == "checkpointed"
+    assert after["status"] == "resume_ready"
+    assert after["verified"] is True
+    assert mismatch == {"status": "denied", "reason": "checkpoint_mismatch"}
