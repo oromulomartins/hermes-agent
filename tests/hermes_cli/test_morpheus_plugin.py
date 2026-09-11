@@ -15,6 +15,7 @@ from plugins.morpheus.memory import build_private_memory
 from plugins.morpheus.onboarding import build_repository_onboarding
 from plugins.morpheus.isolation import run_tenant_isolation_proof
 from plugins.morpheus.spec import build_spec
+from plugins.morpheus.specialists import route_curated_specialist
 from plugins.morpheus.supervisor import manage_durable_run
 from plugins.morpheus.worker import build_isolated_worker
 from tools.registry import registry
@@ -103,6 +104,7 @@ def test_morpheus_plugin_registers_namespaced_diagnostic_when_enabled(tmp_path, 
     assert payload["capabilities"]["repository_onboarding"] is True
     assert payload["capabilities"]["tenant_isolation_proof"] is True
     assert payload["capabilities"]["durable_run_supervisor"] is True
+    assert payload["capabilities"]["curated_web_specialists"] is True
 
 
 def test_morpheus_intake_produces_separate_briefs_and_persists_glossary(tmp_path, monkeypatch):
@@ -657,3 +659,98 @@ def test_morpheus_durable_run_resumes_after_matching_checkpoint_and_detects_mism
     assert after["status"] == "resume_ready"
     assert after["verified"] is True
     assert mismatch == {"status": "denied", "reason": "checkpoint_mismatch"}
+
+
+def _specialist_candidates():
+    return [
+        {
+            "name": "awesome-backend",
+            "role": "Backend",
+            "adapter": "curated-tool-adapter",
+            "license": "MIT",
+            "sha": "a" * 64,
+            "digest": "b" * 64,
+        },
+        {
+            "name": "awesome-frontend",
+            "role": "Frontend",
+            "adapter": "curated-tool-adapter",
+            "license": "Apache-2.0",
+            "sha": "c" * 64,
+            "digest": "d" * 64,
+        },
+        {
+            "name": "awesome-fullstack",
+            "role": "FullStack",
+            "adapter": "curated-tool-adapter",
+            "license": "MIT",
+            "sha": "e" * 64,
+            "digest": "f" * 64,
+        },
+    ]
+
+
+@pytest.mark.parametrize(
+    ("role", "fixture"),
+    [("Backend", "fastapi"), ("Frontend", "react"), ("FullStack", "web-api")],
+)
+def test_morpheus_curated_specialist_routes_each_web_role_to_a_valid_fixture(role, fixture):
+    result = route_curated_specialist(
+        {
+            "project_id": "synthetic-customer-a",
+            "requested_role": role,
+            "coordinator_role": "TL",
+            "fixture": fixture,
+            "candidates": _specialist_candidates(),
+        }
+    )
+
+    assert result["status"] == "ready"
+    assert result["specialist"]["role"] == role
+    assert result["specialist"]["adapter"] == "curated-tool-adapter"
+    assert result["validation"] == {
+        "fixture": fixture,
+        "output": {"role": role, "adapter": "curated-tool-adapter"},
+        "valid": True,
+        "executed": False,
+    }
+
+
+def test_morpheus_curated_specialist_limits_coordination_to_the_current_project(tmp_path, monkeypatch):
+    manager = _enabled_manager(tmp_path, monkeypatch)
+    raw = registry.dispatch(
+        "morpheus_curated_specialist",
+        {
+            "project_id": "synthetic-customer-a",
+            "requested_role": "Backend",
+            "coordinator_role": "PM",
+            "fixture": "fastapi",
+            "candidates": _specialist_candidates(),
+        },
+        scope=manager.scope_key,
+    )
+    result = json.loads(raw)
+
+    assert result["coordination"] == {
+        "role": "PM",
+        "scope": "project_only",
+        "global_client_context_available": False,
+        "may_execute_specialist": False,
+    }
+    assert result["validation"]["executed"] is False
+
+
+def test_morpheus_curated_specialist_rejects_candidates_without_a_license():
+    candidates = _specialist_candidates()
+    candidates[0].pop("license")
+
+    with pytest.raises(ValueError, match="candidate.license"):
+        route_curated_specialist(
+            {
+                "project_id": "synthetic-customer-a",
+                "requested_role": "Backend",
+                "coordinator_role": "TL",
+                "fixture": "fastapi",
+                "candidates": candidates,
+            }
+        )
