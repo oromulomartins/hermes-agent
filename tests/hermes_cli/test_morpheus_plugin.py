@@ -11,6 +11,7 @@ from hermes_cli.plugins import PluginManager
 from plugins.morpheus.backlog import reconcile_backlog
 from plugins.morpheus.binding import build_project_binding
 from plugins.morpheus.broker import build_scoped_tool_grant
+from plugins.morpheus.journey import run_synthetic_delivery_journey
 from plugins.morpheus.memory import build_private_memory
 from plugins.morpheus.onboarding import build_repository_onboarding
 from plugins.morpheus.isolation import run_tenant_isolation_proof
@@ -105,6 +106,7 @@ def test_morpheus_plugin_registers_namespaced_diagnostic_when_enabled(tmp_path, 
     assert payload["capabilities"]["tenant_isolation_proof"] is True
     assert payload["capabilities"]["durable_run_supervisor"] is True
     assert payload["capabilities"]["curated_web_specialists"] is True
+    assert payload["capabilities"]["synthetic_web_journey"] is True
 
 
 def test_morpheus_intake_produces_separate_briefs_and_persists_glossary(tmp_path, monkeypatch):
@@ -754,3 +756,58 @@ def test_morpheus_curated_specialist_rejects_candidates_without_a_license():
                 "candidates": candidates,
             }
         )
+
+
+def _synthetic_journey_args():
+    return {
+        "project_id": "synthetic-customer-a",
+        "ticket_id": "BPT-22",
+        "journey_id": "delivery-001",
+        "order_id": "synthetic-order-001",
+        "delivery_state": "in_transit",
+    }
+
+
+def test_morpheus_public_journey_creates_and_reads_a_synthetic_web_api_slice(tmp_path, monkeypatch):
+    manager = _enabled_manager(tmp_path, monkeypatch)
+
+    created = json.loads(registry.dispatch(
+        "morpheus_synthetic_delivery_journey",
+        {"operation": "create", **_synthetic_journey_args()},
+        scope=manager.scope_key,
+    ))
+    read = json.loads(registry.dispatch(
+        "morpheus_synthetic_delivery_journey",
+        {
+            "operation": "read",
+            "project_id": "synthetic-customer-a",
+            "journey_id": "delivery-001",
+        },
+        scope=manager.scope_key,
+    ))
+
+    assert created["status"] == "created"
+    assert created["journey"] == read["journey"]
+    assert created["journey"]["api"] == {
+        "method": "GET",
+        "path": "/api/morpheus/projects/synthetic-customer-a/delivery-journeys/delivery-001",
+        "response": {"order_id": "synthetic-order-001", "delivery_state": "in_transit"},
+    }
+    assert created["journey"]["web"] == {
+        "path": "/morpheus/projects/synthetic-customer-a/delivery-journeys/delivery-001",
+        "title": "Delivery status",
+        "delivery_state": "in_transit",
+    }
+    assert created["persistence"] == {
+        "kind": "local-json",
+        "project_scoped": True,
+        "network": "none",
+    }
+
+
+def test_morpheus_synthetic_journey_rejects_non_synthetic_order_data():
+    with pytest.raises(ValueError, match="synthetic order identifier"):
+        run_synthetic_delivery_journey({
+            "operation": "create",
+            **{**_synthetic_journey_args(), "order_id": "customer-order-001"},
+        })
