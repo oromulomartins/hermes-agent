@@ -17,6 +17,7 @@ from .isolation import run_tenant_isolation_proof
 from .memory import build_private_memory
 from .onboarding import build_repository_onboarding
 from .spec import build_spec
+from .specialists import route_curated_specialist
 from .supervisor import manage_durable_run
 from .worker import build_isolated_worker
 
@@ -33,6 +34,7 @@ _SCOPED_TOOL_GRANT_NAME = "morpheus_scoped_tool_grant"
 _REPOSITORY_ONBOARDING_TOOL_NAME = "morpheus_repository_onboarding"
 _TENANT_ISOLATION_PROOF_TOOL_NAME = "morpheus_tenant_isolation_proof"
 _DURABLE_RUN_TOOL_NAME = "morpheus_durable_run"
+_CURATED_SPECIALIST_TOOL_NAME = "morpheus_curated_specialist"
 
 
 def _status_payload() -> dict[str, Any]:
@@ -51,6 +53,7 @@ def _status_payload() -> dict[str, Any]:
             "repository_onboarding": True,
             "tenant_isolation_proof": True,
             "durable_run_supervisor": True,
+            "curated_web_specialists": True,
             "scheduler": False,
             "worker": False,
             "kanban_adapter": "unconfigured",
@@ -112,6 +115,10 @@ def _tenant_isolation_proof_tool(args: dict[str, Any], **__: Any) -> str:
 
 def _durable_run_tool(args: dict[str, Any], **__: Any) -> str:
     return json.dumps(manage_durable_run(args), sort_keys=True)
+
+
+def _curated_specialist_tool(args: dict[str, Any], **__: Any) -> str:
+    return json.dumps(route_curated_specialist(args), sort_keys=True)
 
 
 def register(ctx: Any) -> None:
@@ -396,6 +403,28 @@ def register(ctx: Any) -> None:
         },
         handler=_durable_run_tool,
         description="Morpheus local durable-run claim and checkpoint supervisor.",
+    )
+    ctx.register_tool(
+        name=_CURATED_SPECIALIST_TOOL_NAME,
+        toolset="debugging",
+        schema={
+            "name": _CURATED_SPECIALIST_TOOL_NAME,
+            "description": "Route a synthetic web task to a locally curated, metadata-complete specialist without executing external code.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "project_id": {"type": "string"},
+                    "requested_role": {"type": "string", "enum": ["Backend", "Frontend", "FullStack"]},
+                    "coordinator_role": {"type": "string", "enum": ["PM", "PO", "TM", "TL"]},
+                    "fixture": {"type": "string"},
+                    "candidates": {"type": "array", "items": {"type": "object"}},
+                },
+                "required": ["project_id", "requested_role", "coordinator_role", "fixture", "candidates"],
+                "additionalProperties": False,
+            },
+        },
+        handler=_curated_specialist_tool,
+        description="Morpheus curated Backend, Frontend, and FullStack specialist router.",
     )
     ctx.register_command(
         _DIAGNOSTIC_COMMAND_NAME,
