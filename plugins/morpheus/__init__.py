@@ -14,6 +14,7 @@ from .binding import build_project_binding
 from .broker import build_scoped_tool_grant
 from .intake import build_intake_brief
 from .memory import build_private_memory
+from .onboarding import build_repository_onboarding
 from .spec import build_spec
 from .worker import build_isolated_worker
 
@@ -27,6 +28,7 @@ _PROJECT_BINDING_TOOL_NAME = "morpheus_project_binding"
 _ISOLATED_WORKER_TOOL_NAME = "morpheus_isolated_worker"
 _PRIVATE_MEMORY_TOOL_NAME = "morpheus_project_memory"
 _SCOPED_TOOL_GRANT_NAME = "morpheus_scoped_tool_grant"
+_REPOSITORY_ONBOARDING_TOOL_NAME = "morpheus_repository_onboarding"
 
 
 def _status_payload() -> dict[str, Any]:
@@ -42,6 +44,7 @@ def _status_payload() -> dict[str, Any]:
             "isolated_worker_plan": True,
             "private_project_memory": True,
             "scoped_tool_grant": True,
+            "repository_onboarding": True,
             "scheduler": False,
             "worker": False,
             "kanban_adapter": "unconfigured",
@@ -91,6 +94,10 @@ def _private_memory_tool(args: dict[str, Any], **__: Any) -> str:
 
 def _scoped_tool_grant(args: dict[str, Any], **__: Any) -> str:
     return json.dumps(build_scoped_tool_grant(args), sort_keys=True)
+
+
+def _repository_onboarding_tool(args: dict[str, Any], **__: Any) -> str:
+    return json.dumps(build_repository_onboarding(args), sort_keys=True)
 
 
 def register(ctx: Any) -> None:
@@ -291,6 +298,38 @@ def register(ctx: Any) -> None:
         },
         handler=_scoped_tool_grant,
         description="Morpheus fail-closed, project-scoped tool grant broker.",
+    )
+    ctx.register_tool(
+        name=_REPOSITORY_ONBOARDING_TOOL_NAME,
+        toolset="debugging",
+        schema={
+            "name": _REPOSITORY_ONBOARDING_TOOL_NAME,
+            "description": (
+                "Inventory a received repository and return a curated mount plan "
+                "without executing discovered hooks, plugins, MCPs, or scripts."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "source_repository": {"type": "string"},
+                    "files": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "properties": {"path": {"type": "string"}, "content": {"type": "string"}},
+                            "required": ["path", "content"],
+                            "additionalProperties": False,
+                        },
+                    },
+                    "approved_capabilities": {"type": "array", "items": {"type": "string"}},
+                    "curated_extensions": {"type": "array", "items": {"type": "object"}},
+                },
+                "required": ["source_repository", "files", "approved_capabilities"],
+                "additionalProperties": False,
+            },
+        },
+        handler=_repository_onboarding_tool,
+        description="Morpheus declarative, quarantine-first repository onboarding.",
     )
     ctx.register_command(
         _DIAGNOSTIC_COMMAND_NAME,
