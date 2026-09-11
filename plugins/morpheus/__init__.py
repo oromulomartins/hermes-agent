@@ -18,6 +18,7 @@ from .journey import run_synthetic_delivery_journey
 from .memory import build_private_memory
 from .onboarding import build_repository_onboarding
 from .publisher import reconcile_publication
+from .review_gate import evaluate_review_gate
 from .spec import build_spec
 from .specialists import route_curated_specialist
 from .supervisor import manage_durable_run
@@ -39,6 +40,7 @@ _DURABLE_RUN_TOOL_NAME = "morpheus_durable_run"
 _CURATED_SPECIALIST_TOOL_NAME = "morpheus_curated_specialist"
 _SYNTHETIC_DELIVERY_JOURNEY_TOOL_NAME = "morpheus_synthetic_delivery_journey"
 _PUBLICATION_RECEIPT_TOOL_NAME = "morpheus_publication_receipt"
+_REVIEW_GATE_TOOL_NAME = "morpheus_review_gate"
 
 
 def _status_payload() -> dict[str, Any]:
@@ -60,6 +62,7 @@ def _status_payload() -> dict[str, Any]:
             "curated_web_specialists": True,
             "synthetic_web_journey": True,
             "publication_receipt": True,
+            "review_gate": True,
             "scheduler": False,
             "worker": False,
             "kanban_adapter": "unconfigured",
@@ -133,6 +136,10 @@ def _synthetic_delivery_journey_tool(args: dict[str, Any], **__: Any) -> str:
 
 def _publication_receipt_tool(args: dict[str, Any], **__: Any) -> str:
     return json.dumps(reconcile_publication(args), sort_keys=True)
+
+
+def _review_gate_tool(args: dict[str, Any], **__: Any) -> str:
+    return json.dumps(evaluate_review_gate(args), sort_keys=True)
 
 
 def register(ctx: Any) -> None:
@@ -504,6 +511,28 @@ def register(ctx: Any) -> None:
         },
         handler=_publication_receipt_tool,
         description="Morpheus idempotent verified-publication receipt.",
+    )
+    ctx.register_tool(
+        name=_REVIEW_GATE_TOOL_NAME,
+        toolset="debugging",
+        schema={
+            "name": _REVIEW_GATE_TOOL_NAME,
+            "description": "Apply a fail-closed review gate for a fixed SHA without merging remotely.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "ticket_id": {"type": "string"}, "spec_sha": {"type": "string"},
+                    "reviewed_sha": {"type": "string"}, "current_sha": {"type": "string"},
+                    "review_contexts": {"type": "array", "items": {"type": "string"}},
+                    "checks": {"type": "array", "items": {"type": "object"}},
+                    "human_merge_authorized": {"type": "boolean"},
+                },
+                "required": ["ticket_id", "spec_sha", "reviewed_sha", "current_sha", "review_contexts", "checks", "human_merge_authorized"],
+                "additionalProperties": False,
+            },
+        },
+        handler=_review_gate_tool,
+        description="Morpheus independent-review and current-check merge gate.",
     )
     ctx.register_command(
         _DIAGNOSTIC_COMMAND_NAME,
