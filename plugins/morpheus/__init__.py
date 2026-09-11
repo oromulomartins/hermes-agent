@@ -17,6 +17,7 @@ from .isolation import run_tenant_isolation_proof
 from .memory import build_private_memory
 from .onboarding import build_repository_onboarding
 from .spec import build_spec
+from .supervisor import manage_durable_run
 from .worker import build_isolated_worker
 
 
@@ -31,6 +32,7 @@ _PRIVATE_MEMORY_TOOL_NAME = "morpheus_project_memory"
 _SCOPED_TOOL_GRANT_NAME = "morpheus_scoped_tool_grant"
 _REPOSITORY_ONBOARDING_TOOL_NAME = "morpheus_repository_onboarding"
 _TENANT_ISOLATION_PROOF_TOOL_NAME = "morpheus_tenant_isolation_proof"
+_DURABLE_RUN_TOOL_NAME = "morpheus_durable_run"
 
 
 def _status_payload() -> dict[str, Any]:
@@ -48,6 +50,7 @@ def _status_payload() -> dict[str, Any]:
             "scoped_tool_grant": True,
             "repository_onboarding": True,
             "tenant_isolation_proof": True,
+            "durable_run_supervisor": True,
             "scheduler": False,
             "worker": False,
             "kanban_adapter": "unconfigured",
@@ -105,6 +108,10 @@ def _repository_onboarding_tool(args: dict[str, Any], **__: Any) -> str:
 
 def _tenant_isolation_proof_tool(args: dict[str, Any], **__: Any) -> str:
     return json.dumps(run_tenant_isolation_proof(args), sort_keys=True)
+
+
+def _durable_run_tool(args: dict[str, Any], **__: Any) -> str:
+    return json.dumps(manage_durable_run(args), sort_keys=True)
 
 
 def register(ctx: Any) -> None:
@@ -362,6 +369,33 @@ def register(ctx: Any) -> None:
         },
         handler=_tenant_isolation_proof_tool,
         description="Morpheus local project-isolation proof and kill switch.",
+    )
+    ctx.register_tool(
+        name=_DURABLE_RUN_TOOL_NAME,
+        toolset="debugging",
+        schema={
+            "name": _DURABLE_RUN_TOOL_NAME,
+            "description": "Manage local durable claims, fencing, heartbeats, and checkpoints without starting a worker.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "operation": {"type": "string", "enum": ["claim", "heartbeat", "checkpoint", "publish", "resume"]},
+                    "project_id": {"type": "string"},
+                    "repository": {"type": "string"},
+                    "task_id": {"type": "string"},
+                    "worker_id": {"type": "string"},
+                    "now_epoch": {"type": "integer", "minimum": 0},
+                    "lease_seconds": {"type": "integer", "minimum": 0},
+                    "fencing_token": {"type": "integer", "minimum": 0},
+                    "spec_sha": {"type": "string"},
+                    "head_sha": {"type": "string"},
+                },
+                "required": ["operation", "project_id", "repository", "task_id", "worker_id", "now_epoch"],
+                "additionalProperties": False,
+            },
+        },
+        handler=_durable_run_tool,
+        description="Morpheus local durable-run claim and checkpoint supervisor.",
     )
     ctx.register_command(
         _DIAGNOSTIC_COMMAND_NAME,
