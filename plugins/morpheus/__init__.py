@@ -14,6 +14,7 @@ from .binding import build_project_binding
 from .broker import build_scoped_tool_grant
 from .intake import build_intake_brief
 from .isolation import run_tenant_isolation_proof
+from .journey import run_synthetic_delivery_journey
 from .memory import build_private_memory
 from .onboarding import build_repository_onboarding
 from .spec import build_spec
@@ -35,6 +36,7 @@ _REPOSITORY_ONBOARDING_TOOL_NAME = "morpheus_repository_onboarding"
 _TENANT_ISOLATION_PROOF_TOOL_NAME = "morpheus_tenant_isolation_proof"
 _DURABLE_RUN_TOOL_NAME = "morpheus_durable_run"
 _CURATED_SPECIALIST_TOOL_NAME = "morpheus_curated_specialist"
+_SYNTHETIC_DELIVERY_JOURNEY_TOOL_NAME = "morpheus_synthetic_delivery_journey"
 
 
 def _status_payload() -> dict[str, Any]:
@@ -54,6 +56,7 @@ def _status_payload() -> dict[str, Any]:
             "tenant_isolation_proof": True,
             "durable_run_supervisor": True,
             "curated_web_specialists": True,
+            "synthetic_web_journey": True,
             "scheduler": False,
             "worker": False,
             "kanban_adapter": "unconfigured",
@@ -119,6 +122,10 @@ def _durable_run_tool(args: dict[str, Any], **__: Any) -> str:
 
 def _curated_specialist_tool(args: dict[str, Any], **__: Any) -> str:
     return json.dumps(route_curated_specialist(args), sort_keys=True)
+
+
+def _synthetic_delivery_journey_tool(args: dict[str, Any], **__: Any) -> str:
+    return json.dumps(run_synthetic_delivery_journey(args), sort_keys=True)
 
 
 def register(ctx: Any) -> None:
@@ -425,6 +432,35 @@ def register(ctx: Any) -> None:
         },
         handler=_curated_specialist_tool,
         description="Morpheus curated Backend, Frontend, and FullStack specialist router.",
+    )
+    ctx.register_tool(
+        name=_SYNTHETIC_DELIVERY_JOURNEY_TOOL_NAME,
+        toolset="debugging",
+        schema={
+            "name": _SYNTHETIC_DELIVERY_JOURNEY_TOOL_NAME,
+            "description": (
+                "Create or read one synthetic delivery journey through a public "
+                "web/API contract with project-local persistence and no network access."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "operation": {"type": "string", "enum": ["create", "read"]},
+                    "project_id": {"type": "string"},
+                    "journey_id": {"type": "string"},
+                    "ticket_id": {"type": "string"},
+                    "order_id": {"type": "string"},
+                    "delivery_state": {
+                        "type": "string",
+                        "enum": ["created", "packed", "in_transit", "delivered"],
+                    },
+                },
+                "required": ["operation", "project_id", "journey_id"],
+                "additionalProperties": False,
+            },
+        },
+        handler=_synthetic_delivery_journey_tool,
+        description="Morpheus public synthetic delivery web/API journey.",
     )
     ctx.register_command(
         _DIAGNOSTIC_COMMAND_NAME,
