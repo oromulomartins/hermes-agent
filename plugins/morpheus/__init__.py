@@ -13,6 +13,7 @@ from .backlog import reconcile_backlog
 from .binding import build_project_binding
 from .broker import build_scoped_tool_grant
 from .intake import build_intake_brief
+from .isolation import run_tenant_isolation_proof
 from .memory import build_private_memory
 from .onboarding import build_repository_onboarding
 from .spec import build_spec
@@ -29,6 +30,7 @@ _ISOLATED_WORKER_TOOL_NAME = "morpheus_isolated_worker"
 _PRIVATE_MEMORY_TOOL_NAME = "morpheus_project_memory"
 _SCOPED_TOOL_GRANT_NAME = "morpheus_scoped_tool_grant"
 _REPOSITORY_ONBOARDING_TOOL_NAME = "morpheus_repository_onboarding"
+_TENANT_ISOLATION_PROOF_TOOL_NAME = "morpheus_tenant_isolation_proof"
 
 
 def _status_payload() -> dict[str, Any]:
@@ -45,6 +47,7 @@ def _status_payload() -> dict[str, Any]:
             "private_project_memory": True,
             "scoped_tool_grant": True,
             "repository_onboarding": True,
+            "tenant_isolation_proof": True,
             "scheduler": False,
             "worker": False,
             "kanban_adapter": "unconfigured",
@@ -98,6 +101,10 @@ def _scoped_tool_grant(args: dict[str, Any], **__: Any) -> str:
 
 def _repository_onboarding_tool(args: dict[str, Any], **__: Any) -> str:
     return json.dumps(build_repository_onboarding(args), sort_keys=True)
+
+
+def _tenant_isolation_proof_tool(args: dict[str, Any], **__: Any) -> str:
+    return json.dumps(run_tenant_isolation_proof(args), sort_keys=True)
 
 
 def register(ctx: Any) -> None:
@@ -330,6 +337,31 @@ def register(ctx: Any) -> None:
         },
         handler=_repository_onboarding_tool,
         description="Morpheus declarative, quarantine-first repository onboarding.",
+    )
+    ctx.register_tool(
+        name=_TENANT_ISOLATION_PROOF_TOOL_NAME,
+        toolset="debugging",
+        schema={
+            "name": _TENANT_ISOLATION_PROOF_TOOL_NAME,
+            "description": (
+                "Run a local, deterministic cross-project isolation proof and apply "
+                "a project kill switch without exposing private test content."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "project_id": {"type": "string"},
+                    "peer_project": {"type": "string"},
+                    "private_canary": {"type": "string"},
+                    "attack_vectors": {"type": "array", "items": {"type": "string"}},
+                    "active_grant_ids": {"type": "array", "items": {"type": "string"}},
+                },
+                "required": ["project_id", "peer_project", "private_canary", "attack_vectors"],
+                "additionalProperties": False,
+            },
+        },
+        handler=_tenant_isolation_proof_tool,
+        description="Morpheus local project-isolation proof and kill switch.",
     )
     ctx.register_command(
         _DIAGNOSTIC_COMMAND_NAME,
