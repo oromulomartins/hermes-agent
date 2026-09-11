@@ -1,0 +1,46 @@
+name: hermes-agent-rm
+
+services:
+  dashboard:
+    image: ${IMAGE:?IMAGE is required}
+    container_name: hermes-agent-rm
+    restart: unless-stopped
+    command: ["dashboard", "--host", "0.0.0.0", "--port", "4860", "--no-open"]
+    environment:
+      HERMES_HOME: /opt/data
+      HERMES_WRITE_SAFE_ROOT: /opt/data
+      HERMES_DISABLE_LAZY_INSTALLS: "1"
+      HERMES_UID: "10000"
+      HERMES_GID: "10000"
+      HERMES_DASHBOARD_PUBLIC_URL: https://${TRAEFIK_HOST:?TRAEFIK_HOST is required}
+      HERMES_DASHBOARD_BASIC_AUTH_USERNAME: ${DASHBOARD_USERNAME:?DASHBOARD_USERNAME is required}
+      HERMES_DASHBOARD_BASIC_AUTH_PASSWORD_HASH: ${DASHBOARD_PASSWORD_HASH:?DASHBOARD_PASSWORD_HASH is required}
+      HERMES_DASHBOARD_BASIC_AUTH_SECRET: ${DASHBOARD_SESSION_SECRET:?DASHBOARD_SESSION_SECRET is required}
+    volumes:
+      - hermes-agent-rm-data:/opt/data
+    networks:
+      - traefik
+    labels:
+      traefik.enable: "true"
+      traefik.docker.network: compose_hermes_net
+      traefik.http.routers.hermes-agent-rm.rule: Host(`${TRAEFIK_HOST}`)
+      traefik.http.routers.hermes-agent-rm.entrypoints: websecure
+      traefik.http.routers.hermes-agent-rm.tls.certresolver: letsencrypt
+      traefik.http.routers.hermes-agent-rm.service: hermes-agent-rm
+      traefik.http.services.hermes-agent-rm.loadbalancer.server.port: "4860"
+    security_opt:
+      - no-new-privileges:true
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: "3"
+
+networks:
+  traefik:
+    external: true
+    name: compose_hermes_net
+
+volumes:
+  hermes-agent-rm-data:
+    name: hermes-agent-rm-data
