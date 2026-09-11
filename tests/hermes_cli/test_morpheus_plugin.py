@@ -9,6 +9,7 @@ import pytest
 from hermes_cli.plugins import PluginManager
 from plugins.morpheus.backlog import reconcile_backlog
 from plugins.morpheus.binding import build_project_binding
+from plugins.morpheus.broker import build_scoped_tool_grant
 from plugins.morpheus.memory import build_private_memory
 from plugins.morpheus.spec import build_spec
 from plugins.morpheus.worker import build_isolated_worker
@@ -94,6 +95,7 @@ def test_morpheus_plugin_registers_namespaced_diagnostic_when_enabled(tmp_path, 
     assert payload["capabilities"]["project_binding"] is True
     assert payload["capabilities"]["isolated_worker_plan"] is True
     assert payload["capabilities"]["private_project_memory"] is True
+    assert payload["capabilities"]["scoped_tool_grant"] is True
 
 
 def test_morpheus_intake_produces_separate_briefs_and_persists_glossary(tmp_path, monkeypatch):
@@ -406,3 +408,63 @@ def test_morpheus_private_memory_rejects_a_binding_from_another_project():
 
     with pytest.raises(PermissionError, match="does not match"):
         build_private_memory(args)
+
+
+def _broker_args():
+    return {
+        "authenticated_project": "synthetic-customer-a",
+        "binding": build_project_binding(_binding_args())["binding"],
+        "tool": "github",
+        "action": "write",
+        "requested_scope": "oromulomartins/hermes-agent",
+        "now_epoch": 100,
+        "expires_at": 400,
+    }
+
+
+def test_morpheus_scoped_tool_grant_limits_github_to_the_bound_repository(tmp_path, monkeypatch):
+    manager = _enabled_manager(tmp_path, monkeypatch)
+
+    result = json.loads(registry.dispatch(
+        "morpheus_scoped_tool_grant", _broker_args(), scope=manager.scope_key
+    ))
+
+    assert result["status"] == "granted"
+    assert result["grant"]["scope"] == {"repository": "oromulomartins/hermes-agent"}
+    assert result["grant"]["credential_material"] == "not_exposed"
+    assert result["worker"]["credentials_available"] is False
+
+
+def test_morpheus_scoped_tool_grant_denies_foreign_scopes_without_recording_them(tmp_path, monkeypatch):
+    _enabled_manager(tmp_path, monkeypatch)
+    args = _broker_args()
+    args["requested_scope"] = "other-customer/private-repository"
+
+    denied = build_scoped_tool_grant(args)
+    audit = next((tmp_path / "hermes-home" / "plugin-data" / "morpheus" / "projects").rglob("*.jsonl"))
+
+    assert denied == {
+        "status": "denied",
+        "reason": "scope_not_authorized",
+        "audit": {"event": "tool_access_denied", "recorded": True},
+        "worker": {"credentials_available": False},
+    }
+    assert "other-customer/private-repository" not in audit.read_text(encoding="utf-8")
+
+
+@pytest.mark.parametrize(
+    ("changes", "reason"),
+    [
+        ({"policy_state": "unavailable"}, "policy_unavailable"),
+        ({"expires_at": 100}, "grant_expired"),
+    ],
+)
+def test_morpheus_scoped_tool_grant_denies_policy_failures_and_expired_grants(
+    tmp_path, monkeypatch, changes, reason
+):
+    _enabled_manager(tmp_path, monkeypatch)
+    result = build_scoped_tool_grant({**_broker_args(), **changes})
+
+    assert result["status"] == "denied"
+    assert result["reason"] == reason
+    assert result["audit"]["recorded"] is True

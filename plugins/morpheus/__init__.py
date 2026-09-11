@@ -11,6 +11,7 @@ from typing import Any
 
 from .backlog import reconcile_backlog
 from .binding import build_project_binding
+from .broker import build_scoped_tool_grant
 from .intake import build_intake_brief
 from .memory import build_private_memory
 from .spec import build_spec
@@ -25,6 +26,7 @@ _BACKLOG_TOOL_NAME = "morpheus_backlog_reconcile"
 _PROJECT_BINDING_TOOL_NAME = "morpheus_project_binding"
 _ISOLATED_WORKER_TOOL_NAME = "morpheus_isolated_worker"
 _PRIVATE_MEMORY_TOOL_NAME = "morpheus_project_memory"
+_SCOPED_TOOL_GRANT_NAME = "morpheus_scoped_tool_grant"
 
 
 def _status_payload() -> dict[str, Any]:
@@ -39,6 +41,7 @@ def _status_payload() -> dict[str, Any]:
             "project_binding": True,
             "isolated_worker_plan": True,
             "private_project_memory": True,
+            "scoped_tool_grant": True,
             "scheduler": False,
             "worker": False,
             "kanban_adapter": "unconfigured",
@@ -84,6 +87,10 @@ def _isolated_worker_tool(args: dict[str, Any], **__: Any) -> str:
 
 def _private_memory_tool(args: dict[str, Any], **__: Any) -> str:
     return json.dumps(build_private_memory(args), sort_keys=True)
+
+
+def _scoped_tool_grant(args: dict[str, Any], **__: Any) -> str:
+    return json.dumps(build_scoped_tool_grant(args), sort_keys=True)
 
 
 def register(ctx: Any) -> None:
@@ -256,6 +263,34 @@ def register(ctx: Any) -> None:
         },
         handler=_private_memory_tool,
         description="Morpheus project-bound private memory and handoff store.",
+    )
+    ctx.register_tool(
+        name=_SCOPED_TOOL_GRANT_NAME,
+        toolset="debugging",
+        schema={
+            "name": _SCOPED_TOOL_GRANT_NAME,
+            "description": (
+                "Issue a short-lived, project-scoped GitHub or Jira grant without "
+                "exposing credential material to a worker."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "authenticated_project": {"type": "string"},
+                    "binding": {"type": "object"},
+                    "tool": {"type": "string", "enum": ["github", "jira"]},
+                    "action": {"type": "string", "enum": ["read", "write"]},
+                    "requested_scope": {"type": "string"},
+                    "policy_state": {"type": "string", "enum": ["allow", "deny", "unavailable"]},
+                    "now_epoch": {"type": "integer", "minimum": 0},
+                    "expires_at": {"type": "integer", "minimum": 0},
+                },
+                "required": ["authenticated_project", "binding", "tool", "action", "requested_scope"],
+                "additionalProperties": False,
+            },
+        },
+        handler=_scoped_tool_grant,
+        description="Morpheus fail-closed, project-scoped tool grant broker.",
     )
     ctx.register_command(
         _DIAGNOSTIC_COMMAND_NAME,
