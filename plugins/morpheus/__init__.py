@@ -17,6 +17,7 @@ from .isolation import run_tenant_isolation_proof
 from .journey import run_synthetic_delivery_journey
 from .memory import build_private_memory
 from .onboarding import build_repository_onboarding
+from .publisher import reconcile_publication
 from .spec import build_spec
 from .specialists import route_curated_specialist
 from .supervisor import manage_durable_run
@@ -37,6 +38,7 @@ _TENANT_ISOLATION_PROOF_TOOL_NAME = "morpheus_tenant_isolation_proof"
 _DURABLE_RUN_TOOL_NAME = "morpheus_durable_run"
 _CURATED_SPECIALIST_TOOL_NAME = "morpheus_curated_specialist"
 _SYNTHETIC_DELIVERY_JOURNEY_TOOL_NAME = "morpheus_synthetic_delivery_journey"
+_PUBLICATION_RECEIPT_TOOL_NAME = "morpheus_publication_receipt"
 
 
 def _status_payload() -> dict[str, Any]:
@@ -57,6 +59,7 @@ def _status_payload() -> dict[str, Any]:
             "durable_run_supervisor": True,
             "curated_web_specialists": True,
             "synthetic_web_journey": True,
+            "publication_receipt": True,
             "scheduler": False,
             "worker": False,
             "kanban_adapter": "unconfigured",
@@ -126,6 +129,10 @@ def _curated_specialist_tool(args: dict[str, Any], **__: Any) -> str:
 
 def _synthetic_delivery_journey_tool(args: dict[str, Any], **__: Any) -> str:
     return json.dumps(run_synthetic_delivery_journey(args), sort_keys=True)
+
+
+def _publication_receipt_tool(args: dict[str, Any], **__: Any) -> str:
+    return json.dumps(reconcile_publication(args), sort_keys=True)
 
 
 def register(ctx: Any) -> None:
@@ -461,6 +468,42 @@ def register(ctx: Any) -> None:
         },
         handler=_synthetic_delivery_journey_tool,
         description="Morpheus public synthetic delivery web/API journey.",
+    )
+    ctx.register_tool(
+        name=_PUBLICATION_RECEIPT_TOOL_NAME,
+        toolset="debugging",
+        schema={
+            "name": _PUBLICATION_RECEIPT_TOOL_NAME,
+            "description": (
+                "Reconcile verified branch, SHA, PR, and test evidence into a local, "
+                "idempotent receipt without starting a remote write."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "project_id": {"type": "string"},
+                    "repository": {"type": "string"},
+                    "ticket_id": {"type": "string"},
+                    "branch": {"type": "string"},
+                    "base_sha": {"type": "string"},
+                    "expected_head_sha": {"type": "string"},
+                    "remote_head_sha": {"type": "string"},
+                    "pr_number": {"type": "integer", "minimum": 1},
+                    "problem": {"type": "string"},
+                    "behavior": {"type": "string"},
+                    "spec_sha": {"type": "string"},
+                    "test_evidence": {"type": "string"},
+                },
+                "required": [
+                    "project_id", "repository", "ticket_id", "branch", "base_sha",
+                    "expected_head_sha", "remote_head_sha", "pr_number", "problem",
+                    "behavior", "spec_sha", "test_evidence",
+                ],
+                "additionalProperties": False,
+            },
+        },
+        handler=_publication_receipt_tool,
+        description="Morpheus idempotent verified-publication receipt.",
     )
     ctx.register_command(
         _DIAGNOSTIC_COMMAND_NAME,
