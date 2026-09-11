@@ -1,0 +1,104 @@
+name: Deploy Hermes Agent RM
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+concurrency:
+  group: hermes-agent-rm-hostinger
+  cancel-in-progress: false
+
+jobs:
+  test-build-deploy:
+    runs-on: ubuntu-24.04
+    env:
+      IMAGE: ghcr.io/${{ github.repository }}:hermes-agent-rm-${{ github.sha }}
+      DEPLOY_DIR: apps/hermes-agent-rm
+      TRAEFIK_HOST: hermes-agent-rm.romulomartins.io
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Verify deployment configuration
+        env:
+          GHCR_PULL_TOKEN: ${{ secrets.GHCR_PULL_TOKEN }}
+          HOSTINGER_SSH_HOST: ${{ secrets.HOSTINGER_SSH_HOST }}
+          HOSTINGER_SSH_USER: ${{ secrets.HOSTINGER_SSH_USER }}
+          HOSTINGER_SSH_PRIVATE_KEY: ${{ secrets.HOSTINGER_SSH_PRIVATE_KEY }}
+          HOSTINGER_SSH_KNOWN_HOSTS: ${{ secrets.HOSTINGER_SSH_KNOWN_HOSTS }}
+          DASHBOARD_USERNAME: ${{ secrets.HERMES_AGENT_RM_DASHBOARD_USERNAME }}
+          DASHBOARD_PASSWORD_HASH: ${{ secrets.HERMES_AGENT_RM_DASHBOARD_PASSWORD_HASH }}
+          DASHBOARD_SESSION_SECRET: ${{ secrets.HERMES_AGENT_RM_DASHBOARD_SESSION_SECRET }}
+        run: |
+          test -n "$GHCR_PULL_TOKEN"
+          test -n "$HOSTINGER_SSH_HOST"
+          test -n "$HOSTINGER_SSH_USER"
+          test -n "$HOSTINGER_SSH_PRIVATE_KEY"
+          test -n "$HOSTINGER_SSH_KNOWN_HOSTS"
+          test -n "$DASHBOARD_USERNAME"
+          test -n "$DASHBOARD_PASSWORD_HASH"
+          test -n "$DASHBOARD_SESSION_SECRET"
+
+      - name: Test Morpheus plugin in Docker
+        run: >-
+          docker run --rm -v "$PWD:/workspace" -w /workspace python:3.13-slim sh -lc
+          'python -m pip install --disable-pip-version-check -q pytest pyyaml ruamel.yaml &&
+          python -m pytest -q tests/hermes_cli/test_morpheus_plugin.py'
+
+      - name: Log in to GitHub Container Registry
+        run: echo "$GITHUB_TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
+
+      - name: Build and push image
+        run: |
+          docker build --pull --tag "$IMAGE" .
+          docker push "$IMAGE"
+
+      - name: Configure SSH
+        env:
+          HOSTINGER_SSH_PRIVATE_KEY: ${{ secrets.HOSTINGER_SSH_PRIVATE_KEY }}
+          HOSTINGER_SSH_KNOWN_HOSTS: ${{ secrets.HOSTINGER_SSH_KNOWN_HOSTS }}
+        run: |
+          install -d -m 700 ~/.ssh
+          printf '%s\n' "$HOSTINGER_SSH_PRIVATE_KEY" > ~/.ssh/id_ed25519
+          printf '%s\n' "$HOSTINGER_SSH_KNOWN_HOSTS" > ~/.ssh/known_hosts
+          chmod 600 ~/.ssh/id_ed25519 ~/.ssh/known_hosts
+
+      - name: Upload isolated deployment definition
+        env:
+          HOSTINGER_SSH_HOST: ${{ secrets.HOSTINGER_SSH_HOST }}
+          HOSTINGER_SSH_USER: ${{ secrets.HOSTINGER_SSH_USER }}
+        run: |
+          target="$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST"
+          ssh "$target" "mkdir -p '$DEPLOY_DIR'"
+          scp deploy/hostinger/docker-compose.yml deploy/hostinger/deploy.sh "$target:$DEPLOY_DIR/"
+          ssh "$target" "chmod 700 '$DEPLOY_DIR/deploy.sh'"
+
+      - name: Deploy and verify through Traefik
+        env:
+          HOSTINGER_SSH_HOST: ${{ secrets.HOSTINGER_SSH_HOST }}
+          HOSTINGER_SSH_USER: ${{ secrets.HOSTINGER_SSH_USER }}
+          GHCR_PULL_TOKEN: ${{ secrets.GHCR_PULL_TOKEN }}
+          DASHBOARD_USERNAME: ${{ secrets.HERMES_AGENT_RM_DASHBOARD_USERNAME }}
+          DASHBOARD_PASSWORD_HASH: ${{ secrets.HERMES_AGENT_RM_DASHBOARD_PASSWORD_HASH }}
+          DASHBOARD_SESSION_SECRET: ${{ secrets.HERMES_AGENT_RM_DASHBOARD_SESSION_SECRET }}
+        run: |
+          test -n "$GHCR_PULL_TOKEN"
+          test -n "$DASHBOARD_USERNAME"
+          test -n "$DASHBOARD_PASSWORD_HASH"
+          test -n "$DASHBOARD_SESSION_SECRET"
+          umask 077
+          {
+            printf 'IMAGE=%s\n' "$IMAGE"
+            printf 'TRAEFIK_HOST=%s\n' "$TRAEFIK_HOST"
+            printf 'DASHBOARD_USERNAME=%s\n' "$DASHBOARD_USERNAME"
+            printf 'DASHBOARD_PASSWORD_HASH=%s\n' "$DASHBOARD_PASSWORD_HASH"
+            printf 'DASHBOARD_SESSION_SECRET=%s\n' "$DASHBOARD_SESSION_SECRET"
+          } > .hostinger.env
+          target="$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST"
+          scp .hostinger.env "$target:$DEPLOY_DIR/.env.next"
+          rm -f .hostinger.env
+          printf '%s' "$GHCR_PULL_TOKEN" | ssh "$target" "docker login ghcr.io -u '$GITHUB_ACTOR' --password-stdin && cd '$DEPLOY_DIR' && ./deploy.sh; status=\$?; docker logout ghcr.io >/dev/null; exit \$status"
