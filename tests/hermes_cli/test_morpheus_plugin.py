@@ -13,6 +13,7 @@ from plugins.morpheus.binding import build_project_binding
 from plugins.morpheus.broker import build_scoped_tool_grant
 from plugins.morpheus.memory import build_private_memory
 from plugins.morpheus.onboarding import build_repository_onboarding
+from plugins.morpheus.isolation import run_tenant_isolation_proof
 from plugins.morpheus.spec import build_spec
 from plugins.morpheus.worker import build_isolated_worker
 from tools.registry import registry
@@ -99,6 +100,7 @@ def test_morpheus_plugin_registers_namespaced_diagnostic_when_enabled(tmp_path, 
     assert payload["capabilities"]["private_project_memory"] is True
     assert payload["capabilities"]["scoped_tool_grant"] is True
     assert payload["capabilities"]["repository_onboarding"] is True
+    assert payload["capabilities"]["tenant_isolation_proof"] is True
 
 
 def test_morpheus_intake_produces_separate_briefs_and_persists_glossary(tmp_path, monkeypatch):
@@ -533,3 +535,38 @@ def test_morpheus_repository_onboarding_mounts_only_digest_matched_authorized_ca
     assert result["curated_catalog"]["rejected"] == [
         {"path": "plugins/curated/plugin.yaml", "reason": "digest_mismatch"}
     ]
+
+
+def _isolation_proof_args():
+    return {
+        "project_id": "synthetic-customer-a",
+        "peer_project": "synthetic-customer-b",
+        "private_canary": "private-canary-a-must-not-leak",
+        "attack_vectors": ["file", "symlink", "memory", "jira", "repository", "network", "artifact"],
+        "active_grant_ids": ["grant-001", "grant-002"],
+    }
+
+
+def test_morpheus_tenant_isolation_proof_denies_every_cross_project_vector_privately(tmp_path, monkeypatch):
+    manager = _enabled_manager(tmp_path, monkeypatch)
+    args = _isolation_proof_args()
+    raw = registry.dispatch("morpheus_tenant_isolation_proof", args, scope=manager.scope_key)
+    result = json.loads(raw)
+    evidence = next((tmp_path / "hermes-home" / "plugin-data" / "morpheus" / "projects").rglob("*.jsonl"))
+
+    assert result["status"] == "contained"
+    assert {item["vector"] for item in result["attack_results"]} == set(args["attack_vectors"])
+    assert {item["decision"] for item in result["attack_results"]} == {"denied"}
+    assert result["control_plane"] == {"received_private_content": False, "central_log_entries": []}
+    assert result["evidence"] == {"private_to_project": True, "preserved": True}
+    assert args["private_canary"] not in raw
+    assert args["peer_project"] not in raw
+    assert args["private_canary"] not in evidence.read_text(encoding="utf-8")
+
+
+def test_morpheus_tenant_isolation_proof_revokes_grants_and_blocks_new_claims(tmp_path, monkeypatch):
+    _enabled_manager(tmp_path, monkeypatch)
+
+    result = run_tenant_isolation_proof(_isolation_proof_args())
+
+    assert result["kill_switch"] == {"new_claims": "denied", "revoked_grant_count": 2}
