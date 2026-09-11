@@ -14,6 +14,7 @@ from plugins.morpheus.broker import build_scoped_tool_grant
 from plugins.morpheus.journey import run_synthetic_delivery_journey
 from plugins.morpheus.memory import build_private_memory
 from plugins.morpheus.onboarding import build_repository_onboarding
+from plugins.morpheus.publisher import reconcile_publication
 from plugins.morpheus.isolation import run_tenant_isolation_proof
 from plugins.morpheus.spec import build_spec
 from plugins.morpheus.specialists import route_curated_specialist
@@ -107,6 +108,7 @@ def test_morpheus_plugin_registers_namespaced_diagnostic_when_enabled(tmp_path, 
     assert payload["capabilities"]["durable_run_supervisor"] is True
     assert payload["capabilities"]["curated_web_specialists"] is True
     assert payload["capabilities"]["synthetic_web_journey"] is True
+    assert payload["capabilities"]["publication_receipt"] is True
 
 
 def test_morpheus_intake_produces_separate_briefs_and_persists_glossary(tmp_path, monkeypatch):
@@ -811,3 +813,53 @@ def test_morpheus_synthetic_journey_rejects_non_synthetic_order_data():
             "operation": "create",
             **{**_synthetic_journey_args(), "order_id": "customer-order-001"},
         })
+
+
+def _publication_args():
+    return {
+        "project_id": "synthetic-customer-a",
+        "repository": "oromulomartins/hermes-agent",
+        "ticket_id": "BPT-23",
+        "branch": "work/BPT-23-publication-receipt",
+        "base_sha": "a" * 40,
+        "expected_head_sha": "b" * 40,
+        "remote_head_sha": "b" * 40,
+        "pr_number": 23,
+        "problem": "Publish only verified delivery evidence.",
+        "behavior": "A reconciled receipt describes the remote PR state.",
+        "spec_sha": "c" * 40,
+        "test_evidence": "35 passed in Docker",
+    }
+
+
+def test_morpheus_publication_receipt_verifies_current_remote_sha_and_reconciles_retry(tmp_path, monkeypatch):
+    manager = _enabled_manager(tmp_path, monkeypatch)
+
+    first = json.loads(registry.dispatch(
+        "morpheus_publication_receipt", _publication_args(), scope=manager.scope_key
+    ))
+    retry = reconcile_publication(_publication_args())
+
+    assert first["status"] == "recorded"
+    assert first["receipt"] == retry["receipt"]
+    assert retry["status"] == "reconciled"
+    assert first["receipt"] == {
+        "repository": "oromulomartins/hermes-agent",
+        "ticket_id": "BPT-23",
+        "branch": "work/BPT-23-publication-receipt",
+        "base_sha": "a" * 40,
+        "head_sha": "b" * 40,
+        "pr_number": 23,
+        "evidence": {
+            "problem": "Publish only verified delivery evidence.",
+            "behavior": "A reconciled receipt describes the remote PR state.",
+            "spec_sha": "c" * 40,
+            "test_evidence": "35 passed in Docker",
+        },
+        "remote_write_started": False,
+    }
+
+
+def test_morpheus_publication_receipt_rejects_remote_sha_mismatch():
+    with pytest.raises(ValueError, match="remote_head_sha"):
+        reconcile_publication({**_publication_args(), "remote_head_sha": "d" * 40})
