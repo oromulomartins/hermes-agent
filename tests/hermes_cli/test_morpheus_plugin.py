@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 
 import pytest
@@ -11,6 +12,7 @@ from plugins.morpheus.backlog import reconcile_backlog
 from plugins.morpheus.binding import build_project_binding
 from plugins.morpheus.broker import build_scoped_tool_grant
 from plugins.morpheus.memory import build_private_memory
+from plugins.morpheus.onboarding import build_repository_onboarding
 from plugins.morpheus.spec import build_spec
 from plugins.morpheus.worker import build_isolated_worker
 from tools.registry import registry
@@ -96,6 +98,7 @@ def test_morpheus_plugin_registers_namespaced_diagnostic_when_enabled(tmp_path, 
     assert payload["capabilities"]["isolated_worker_plan"] is True
     assert payload["capabilities"]["private_project_memory"] is True
     assert payload["capabilities"]["scoped_tool_grant"] is True
+    assert payload["capabilities"]["repository_onboarding"] is True
 
 
 def test_morpheus_intake_produces_separate_briefs_and_persists_glossary(tmp_path, monkeypatch):
@@ -468,3 +471,65 @@ def test_morpheus_scoped_tool_grant_denies_policy_failures_and_expired_grants(
     assert result["status"] == "denied"
     assert result["reason"] == reason
     assert result["audit"]["recorded"] is True
+
+
+def test_morpheus_repository_onboarding_inventories_untrusted_extensions_without_execution(tmp_path, monkeypatch):
+    manager = _enabled_manager(tmp_path, monkeypatch)
+    malicious_hook = "touch should-never-run"
+    raw = registry.dispatch(
+        "morpheus_repository_onboarding",
+        {
+            "source_repository": "external/synthetic-repository",
+            "files": [
+                {"path": ".git/hooks/pre-commit", "content": malicious_hook},
+                {"path": ".mcp.json", "content": "{\\\"mcpServers\\\": {}}"},
+                {"path": "scripts/bootstrap.sh", "content": "echo bootstrap"},
+            ],
+            "approved_capabilities": [],
+        },
+        scope=manager.scope_key,
+    )
+    result = json.loads(raw)
+
+    assert [item["kind"] for item in result["inventory"]] == ["hook", "mcp", "script"]
+    assert result["execution"]["runner_started"] is False
+    assert result["execution"]["discovered_extensions_executed"] is False
+    assert malicious_hook not in json.dumps(result)
+
+
+def test_morpheus_repository_onboarding_mounts_only_digest_matched_authorized_capabilities():
+    plugin_content = "name: curated-plugin\n"
+    result = build_repository_onboarding(
+        {
+            "source_repository": "external/synthetic-repository",
+            "files": [{"path": "plugins/curated/plugin.yaml", "content": plugin_content}],
+            "approved_capabilities": ["read_files"],
+            "curated_extensions": [
+                {
+                    "path": "plugins/curated/plugin.yaml",
+                    "origin": "internal-curated-catalog",
+                    "digest": hashlib.sha256(plugin_content.encode("utf-8")).hexdigest(),
+                    "capabilities": ["read_files"],
+                },
+                {
+                    "path": "plugins/curated/plugin.yaml",
+                    "origin": "untrusted-copy",
+                    "digest": "0" * 64,
+                    "capabilities": ["write_files"],
+                },
+            ],
+        }
+    )
+
+    assert result["curated_catalog"]["mounted"] == [
+        {
+            "path": "plugins/curated/plugin.yaml",
+            "kind": "plugin",
+            "origin": "internal-curated-catalog",
+            "digest": hashlib.sha256(plugin_content.encode("utf-8")).hexdigest(),
+            "capabilities": ["read_files"],
+        }
+    ]
+    assert result["curated_catalog"]["rejected"] == [
+        {"path": "plugins/curated/plugin.yaml", "reason": "digest_mismatch"}
+    ]
