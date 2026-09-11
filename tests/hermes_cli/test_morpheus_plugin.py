@@ -15,6 +15,7 @@ from plugins.morpheus.journey import run_synthetic_delivery_journey
 from plugins.morpheus.memory import build_private_memory
 from plugins.morpheus.onboarding import build_repository_onboarding
 from plugins.morpheus.publisher import reconcile_publication
+from plugins.morpheus.review_gate import evaluate_review_gate
 from plugins.morpheus.isolation import run_tenant_isolation_proof
 from plugins.morpheus.spec import build_spec
 from plugins.morpheus.specialists import route_curated_specialist
@@ -109,6 +110,7 @@ def test_morpheus_plugin_registers_namespaced_diagnostic_when_enabled(tmp_path, 
     assert payload["capabilities"]["curated_web_specialists"] is True
     assert payload["capabilities"]["synthetic_web_journey"] is True
     assert payload["capabilities"]["publication_receipt"] is True
+    assert payload["capabilities"]["review_gate"] is True
 
 
 def test_morpheus_intake_produces_separate_briefs_and_persists_glossary(tmp_path, monkeypatch):
@@ -863,3 +865,39 @@ def test_morpheus_publication_receipt_verifies_current_remote_sha_and_reconciles
 def test_morpheus_publication_receipt_rejects_remote_sha_mismatch():
     with pytest.raises(ValueError, match="remote_head_sha"):
         reconcile_publication({**_publication_args(), "remote_head_sha": "d" * 40})
+
+
+def _review_gate_args():
+    return {
+        "ticket_id": "BPT-24",
+        "spec_sha": "a" * 40,
+        "reviewed_sha": "b" * 40,
+        "current_sha": "b" * 40,
+        "review_contexts": ["spec", "standards"],
+        "checks": [{"name": "morpheus-tests", "status": "passed", "sha": "b" * 40}],
+        "human_merge_authorized": True,
+    }
+
+
+def test_morpheus_review_gate_requires_independent_reviews_current_checks_and_human_authorization(tmp_path, monkeypatch):
+    manager = _enabled_manager(tmp_path, monkeypatch)
+    result = json.loads(registry.dispatch("morpheus_review_gate", _review_gate_args(), scope=manager.scope_key))
+
+    assert result == {
+        "status": "merge_permitted",
+        "reviewed_sha": "b" * 40,
+        "spec_sha": "a" * 40,
+        "checks": ["morpheus-tests"],
+        "human_merge_authorized": True,
+    }
+
+
+@pytest.mark.parametrize(
+    ("changes", "status"),
+    [
+        ({"current_sha": "c" * 40}, "needs_review"),
+        ({"checks": [{"name": "morpheus-tests", "status": "skipped", "sha": "b" * 40}]}, "blocked"),
+    ],
+)
+def test_morpheus_review_gate_blocks_stale_or_non_passing_evidence(changes, status):
+    assert evaluate_review_gate({**_review_gate_args(), **changes})["status"] == status
