@@ -92,13 +92,20 @@ jobs:
           test -n "$DASHBOARD_USERNAME"
           test -n "$DASHBOARD_PASSWORD_HASH"
           test -n "$DASHBOARD_SESSION_SECRET"
+
+          compose_env_value() {
+            printf "'"
+            printf '%s' "$1" | sed "s/'/\\\\'/g"
+            printf "'"
+          }
+
           umask 077
           {
-            printf 'IMAGE=%s\n' "$IMAGE"
-            printf 'TRAEFIK_HOST=%s\n' "$TRAEFIK_HOST"
-            printf 'DASHBOARD_USERNAME=%s\n' "$DASHBOARD_USERNAME"
-            printf 'DASHBOARD_PASSWORD_HASH=%s\n' "$DASHBOARD_PASSWORD_HASH"
-            printf 'DASHBOARD_SESSION_SECRET=%s\n' "$DASHBOARD_SESSION_SECRET"
+            printf 'IMAGE=%s\n' "$(compose_env_value "$IMAGE")"
+            printf 'TRAEFIK_HOST=%s\n' "$(compose_env_value "$TRAEFIK_HOST")"
+            printf 'DASHBOARD_USERNAME=%s\n' "$(compose_env_value "$DASHBOARD_USERNAME")"
+            printf 'DASHBOARD_PASSWORD_HASH=%s\n' "$(compose_env_value "$DASHBOARD_PASSWORD_HASH")"
+            printf 'DASHBOARD_SESSION_SECRET=%s\n' "$(compose_env_value "$DASHBOARD_SESSION_SECRET")"
           } > .hostinger.env
           target="$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST"
           scp .hostinger.env "$target:$DEPLOY_DIR/.env.next"
