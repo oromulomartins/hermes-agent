@@ -50,7 +50,9 @@ jobs:
           python -m pytest -q tests/hermes_cli/test_morpheus_plugin.py'
 
       - name: Log in to GitHub Container Registry
-        run: echo "$GITHUB_TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: printf '%s' "$GITHUB_TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
 
       - name: Build and push image
         run: |
