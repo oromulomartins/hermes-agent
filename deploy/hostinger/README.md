@@ -13,6 +13,11 @@ with the Hermes image or a local checkout:
 python -c "from plugins.dashboard_auth.basic import hash_password; print(hash_password('choose-a-password'))"
 ```
 
+The hash format is `scrypt$n$r$p$salt$digest`. Keep this value single-quoted
+in the deployment `.env`: unquoted dollar signs are interpolated by Compose
+and corrupt the hash. After changing credentials, recreate the dashboard
+container; a plain restart does not reload its environment.
+
 `deploy.sh` keeps the preceding image reference and restores it when the pull,
 startup, or Traefik-routed smoke check fails. It never touches the existing
 `hermes` container or the Hostinger catalog Compose directory.
