@@ -13,10 +13,14 @@ with the Hermes image or a local checkout:
 python -c "from plugins.dashboard_auth.basic import hash_password; print(hash_password('choose-a-password'))"
 ```
 
-The hash format is `scrypt$n$r$p$salt$digest`. Keep this value single-quoted
-in the deployment `.env`: unquoted dollar signs are interpolated by Compose
-and corrupt the hash. After changing credentials, recreate the dashboard
-container; a plain restart does not reload its environment.
+The hash format is `scrypt$n$r$p$salt$digest`. The workflow uses `write-env.sh`
+to quote credentials and escape dollar signs for Compose; GitHub secrets must
+contain the original values, without added quotes or escaping. Unquoted dollar
+signs are interpolated by Compose and corrupt credentials. The writer rejects
+multiline input and preserves raw IMAGE/TRAEFIK_HOST for `deploy.sh`.
+After changing credentials, recreate the dashboard container; a plain restart
+does not reload its environment. `deploy-config-tests.yml` exercises the real
+Compose parser on pull requests without deployment credentials or a deploy.
 
 `deploy.sh` keeps the preceding image reference and restores it when the pull,
 startup, or Traefik-routed smoke check fails. It never touches the existing
