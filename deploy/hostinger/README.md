@@ -95,3 +95,21 @@ HERMES_DEPLOY_DOCKER_TESTS=1 scripts/run_tests.sh deploy/hostinger --file-timeou
 These tests use disposable containers and SQLite history, not staging credentials.
 They exercise the controller against a small HTTP service fixture; the CD rehearsal
 executes the actual previous/candidate Hermes images and actual copied data.
+
+## Docker Hub publishing
+
+`.github/workflows/docker.yml` publishes this fork to
+`romulomartins/hermes-agent`. Both `linux/amd64` and `linux/arm64` build and
+run the Docker integration suite on standard native GitHub-hosted runners before
+publication. Pull requests only build/test; they do not receive registry secrets
+or push images.
+
+The `container-publish` GitHub environment must contain `DOCKERHUB_USERNAME`
+(`romulomartins`) and `DOCKERHUB_TOKEN` (Docker Hub PAT with read/write access).
+After a push to `main` passes the image tests, the workflow pushes architecture
+digests and assembles the `main` and `latest` multi-platform tags. A published
+GitHub release uses its release tag instead. Environment protection rules still
+apply to the publishing jobs.
+
+The staging deployment workflow continues to use its immutable GHCR artifact;
+Docker Hub publication does not change the running VPS image or registry.
