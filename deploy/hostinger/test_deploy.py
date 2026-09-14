@@ -4,8 +4,10 @@ import sqlite3
 from pathlib import Path
 import tempfile
 import unittest
+from unittest.mock import patch
+import subprocess
 
-from deploy import Deployment, DeploymentError, pin_env, preserve
+from deploy import Deployment, DeploymentError, pin_env, preserve, compatible_live
 from probe import integrity
 
 
@@ -128,3 +130,53 @@ class DataIntegrityTests(unittest.TestCase):
                 db.execute("UPDATE state_meta SET value='lost' WHERE key='goal:session'")
             with self.assertRaises(DeploymentError):
                 preserve(before, integrity(root))
+
+
+class PartialFailureTests(unittest.TestCase):
+    def test_stop_failure_after_daemon_effect_still_attempts_restart(self):
+        for error in (DeploymentError('interrupted'), subprocess.TimeoutExpired('docker stop', 300)):
+            with self.subTest(error=type(error).__name__), tempfile.TemporaryDirectory() as directory:
+                app = Deployment(directory)
+                app.env.write_bytes(b'IMAGE=old\n')
+                app.compose.write_bytes(b'old-compose')
+                events = []
+
+                def docker(*args, **kwargs):
+                    if args[0] == 'ps':
+                        return b'hermes-agent-rm\n'
+                    if args[:3] == ('exec', app.container, 'du'):
+                        return b'1 /opt/data'
+                    if args[0] == 'exec':
+                        return b'999999999999'
+                    events.append(args[0])
+                    if args[0] == 'stop':
+                        raise error
+                    return b''
+
+                with patch.object(app, 'docker', side_effect=docker):
+                    with self.assertRaises(type(error)):
+                        app.backup()
+                self.assertEqual(events, ['stop', 'start'])
+
+    def test_live_writes_are_allowed_but_missing_schema_or_corruption_is_rejected(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            with sqlite3.connect(root / 'state.db') as db:
+                db.execute('CREATE TABLE sessions (id TEXT PRIMARY KEY, title TEXT)')
+                db.execute("INSERT INTO sessions VALUES ('first', 'initial')")
+            before = integrity(root)
+            with sqlite3.connect(root / 'state.db') as db:
+                db.execute("INSERT INTO sessions VALUES ('second', 'new session')")
+                db.execute("UPDATE sessions SET title='edited' WHERE id='first'")
+            compatible_live(before, integrity(root))
+            with self.assertRaises(DeploymentError):
+                preserve(before, integrity(root))
+            with self.assertRaises(DeploymentError):
+                compatible_live(before, {})
+            with sqlite3.connect(root / 'state.db') as db:
+                db.execute('DROP TABLE sessions')
+            with self.assertRaises(DeploymentError):
+                compatible_live(before, integrity(root))
+            (root / 'state.db').write_bytes(b'invalid database')
+            with self.assertRaises(sqlite3.DatabaseError):
+                integrity(root)

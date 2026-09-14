@@ -24,10 +24,15 @@ jobs:
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
 
+      - name: Prepare deployment test runner
+        run: |
+          python3 -m venv .venv
+          .venv/bin/python -m pip install --disable-pip-version-check 'pytest==9.1.1'
+
       - name: Test deployment and recovery
         env:
           HERMES_DEPLOY_DOCKER_TESTS: '1'
-        run: python3 -m unittest discover -s deploy/hostinger -p 'test_*.py' -v
+        run: scripts/run_tests.sh deploy/hostinger --file-timeout 600
 
       - name: Verify deployment configuration
         env:
@@ -90,9 +95,12 @@ jobs:
         run: |
           target="$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST"
           bundle="$DEPLOY_DIR/incoming/$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
+          # Expand the trusted workflow path locally; quote it on the remote shell.
+          # shellcheck disable=SC2029
           ssh "$target" "mkdir -p '$bundle'"
           scp deploy/hostinger/docker-compose.yml "$target:$bundle/docker-compose.next.yml"
           scp deploy/hostinger/deploy.sh deploy/hostinger/deploy.py deploy/hostinger/probe.py "$target:$bundle/"
+          # shellcheck disable=SC2029
           ssh "$target" "chmod 700 '$bundle/deploy.sh'"
 
       - name: Deploy and verify through Traefik
@@ -114,6 +122,8 @@ jobs:
           bundle="$DEPLOY_DIR/incoming/$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
           scp .hostinger.env "$target:$bundle/.env.next"
           rm -f .hostinger.env
+          # Workflow IDs/paths expand locally; remote status variables stay escaped.
+          # shellcheck disable=SC2029
           printf '%s' "$GHCR_PULL_TOKEN" | ssh "$target" "docker login ghcr.io -u '$GITHUB_ACTOR' --password-stdin && cd '$DEPLOY_DIR' && DEPLOY_SHA='$GITHUB_SHA' DEPLOY_RUN_ID='$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT' '$bundle/deploy.sh' --directory '$DEPLOY_DIR' --candidate-dir '$bundle'; status=\$?; docker logout ghcr.io >/dev/null; exit \$status"
 
       - name: Collect sanitized deployment receipt

@@ -54,6 +54,13 @@ def preserve(before, after):
         raise DeploymentError('Database compatibility/preservation check failed')
 
 
+def compatible_live(before, after):
+    # Live sessions/messages may be created, updated or deleted while deploying.
+    # Integrity is checked by the probe; retain the conservative schema contract.
+    if any(name not in after or after[name]['schema'] != state['schema'] for name, state in before.items()):
+        raise DeploymentError('Live database schema/presence check failed')
+
+
 class Deployment:
     def __init__(self, directory, *, candidate_directory=None, container='hermes-agent-rm', volume='hermes-agent-rm-data'):
         self.directory = Path(directory).resolve()
@@ -112,7 +119,7 @@ class Deployment:
             if env.get(key) != str(value).replace('$$', '$'):
                 raise DeploymentError('Running configuration mismatch')
         result = self.wait_journey(self.container, env['HERMES_DASHBOARD_PUBLIC_URL'])
-        preserve(baseline, self.probe(self.container, 'integrity'))
+        compatible_live(baseline, self.probe(self.container, 'integrity'))
         return result
 
     def backup(self):
@@ -129,8 +136,9 @@ class Deployment:
         atomic(self.saved / 'docker-compose.yml', self.compose.read_bytes())
         # Stop all app writers before archiving SQLite + WAL and other state.
         self.receipt['stage'] = 'consistent_backup'
-        self.docker('stop', self.container)
         try:
+            # The daemon may stop the app before a timeout/interruption is reported.
+            self.docker('stop', self.container)
             with (self.saved / 'data.tar.gz').open('xb') as archive:
                 p = subprocess.run(['docker', 'run', '--rm', '--network', 'none', '--user', '0',
                                     '--volumes-from', self.container + ':ro', '--entrypoint', 'tar',

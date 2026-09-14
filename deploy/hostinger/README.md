@@ -51,7 +51,7 @@ Before changing the live container, the deployment:
    synthetic password login, authenticated identity/dashboard/session-list access,
    logout, SQLite integrity and unchanged schema/record checks. Credentials are
    synthetic; existing app secrets are not sent to CI. A candidate that changes
-   schema or stored records fails closed before live replacement. This deliberately
+   schema or stored records fails closed before live replacement.
    Startup maintenance timestamps and the lazily recorded FTS format marker are
    excluded from the record comparison; goal/loop metadata remains protected. This
    conservative gate is appropriate for this deployment-only fix, not arbitrary
@@ -66,8 +66,10 @@ Before changing the live container, the deployment:
 isolated recovery rehearsal, without replacing the live app. It still briefly
 stops the dashboard to capture the backup. No shared Traefik/catalog service is
 changed. The rehearsal proves recovery of a copy; the receipt separately records
-whether the live app was deployed or actually rolled back. Concurrent user writes
-can fail the conservative preservation check; use this in a quiet staging window.
+whether the live app was deployed or actually rolled back. Live validation checks
+SQLite integrity, database presence and compatible schemas, allowing legitimate
+concurrent record changes. Exact record preservation is proven only on the isolated
+copy; it is not asserted for a live database that remains writable.
 
 The public smoke requires valid TLS, denies anonymous identity access, checks
 `/api/auth/me`, `/api/sessions` and `/`, and verifies logout clears the client
@@ -87,7 +89,7 @@ SIGKILL cannot be recovered by an in-process handler and requires reconciliation
 Run the PR checks, including real Docker replacement of a synthetic service:
 
 ```sh
-HERMES_DEPLOY_DOCKER_TESTS=1 python3 -m unittest discover -s deploy/hostinger -p 'test_*.py' -v
+HERMES_DEPLOY_DOCKER_TESTS=1 scripts/run_tests.sh deploy/hostinger --file-timeout 600
 ```
 
 These tests use disposable containers and SQLite history, not staging credentials.
