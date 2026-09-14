@@ -15,13 +15,24 @@ concurrency:
 
 jobs:
   test-build-deploy:
+    timeout-minutes: 45
     runs-on: ubuntu-24.04
     env:
       IMAGE: ghcr.io/${{ github.repository }}:hermes-agent-rm-${{ github.sha }}
-      DEPLOY_DIR: apps/hermes-agent-rm
+      DEPLOY_DIR: /home/mrrobot/apps/hermes-agent-rm
       TRAEFIK_HOST: hermes-agent-rm.romulomartins.io
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Prepare deployment test runner
+        run: |
+          python3 -m venv .venv
+          .venv/bin/python -m pip install --disable-pip-version-check 'pytest==9.1.1'
+
+      - name: Test deployment and recovery
+        env:
+          HERMES_DEPLOY_DOCKER_TESTS: '1'
+        run: scripts/run_tests.sh deploy/hostinger --file-timeout 600
 
       - name: Verify deployment configuration
         env:
@@ -46,8 +57,9 @@ jobs:
       - name: Test Morpheus plugin in Docker
         run: >-
           docker run --rm -v "$PWD:/workspace" -w /workspace python:3.13-slim sh -lc
-          'python -m pip install --disable-pip-version-check -q pytest pyyaml ruamel.yaml &&
-          python -m pytest -q tests/hermes_cli/test_morpheus_plugin.py'
+          'python -m pip install --disable-pip-version-check -q uv==0.9.28 &&
+          uv sync --locked --no-install-project --extra dev --extra web &&
+          scripts/run_tests.sh tests/hermes_cli/test_morpheus_plugin.py'
 
       - name: Log in to GitHub Container Registry
         env:
@@ -58,8 +70,15 @@ jobs:
         run: |
           docker build --pull --tag "$IMAGE" .
           docker push "$IMAGE"
+          digest_ref=$(docker image inspect "$IMAGE" --format '{{index .RepoDigests 0}}')
+          case "$digest_ref" in
+            ghcr.io/${{ github.repository }}@sha256:*) ;;
+            *) echo 'Missing pushed image digest' >&2; exit 1 ;;
+          esac
+          echo "IMAGE=$digest_ref" >> "$GITHUB_ENV"
 
       - name: Configure SSH
+        id: ssh
         env:
           HOSTINGER_SSH_PRIVATE_KEY: ${{ secrets.HOSTINGER_SSH_PRIVATE_KEY }}
           HOSTINGER_SSH_KNOWN_HOSTS: ${{ secrets.HOSTINGER_SSH_KNOWN_HOSTS }}
@@ -75,9 +94,14 @@ jobs:
           HOSTINGER_SSH_USER: ${{ secrets.HOSTINGER_SSH_USER }}
         run: |
           target="$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST"
-          ssh "$target" "mkdir -p '$DEPLOY_DIR'"
-          scp deploy/hostinger/docker-compose.yml deploy/hostinger/deploy.sh "$target:$DEPLOY_DIR/"
-          ssh "$target" "chmod 700 '$DEPLOY_DIR/deploy.sh'"
+          bundle="$DEPLOY_DIR/incoming/$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
+          # Expand the trusted workflow path locally; quote it on the remote shell.
+          # shellcheck disable=SC2029
+          ssh "$target" "mkdir -p '$bundle'"
+          scp deploy/hostinger/docker-compose.yml "$target:$bundle/docker-compose.next.yml"
+          scp deploy/hostinger/deploy.sh deploy/hostinger/deploy.py deploy/hostinger/probe.py "$target:$bundle/"
+          # shellcheck disable=SC2029
+          ssh "$target" "chmod 700 '$bundle/deploy.sh'"
 
       - name: Deploy and verify through Traefik
         env:
@@ -93,14 +117,37 @@ jobs:
           test -n "$DASHBOARD_PASSWORD_HASH"
           test -n "$DASHBOARD_SESSION_SECRET"
           umask 077
-          {
-            printf 'IMAGE=%s\n' "$IMAGE"
-            printf 'TRAEFIK_HOST=%s\n' "$TRAEFIK_HOST"
-            printf 'DASHBOARD_USERNAME=%s\n' "$DASHBOARD_USERNAME"
-            printf 'DASHBOARD_PASSWORD_HASH=%s\n' "$DASHBOARD_PASSWORD_HASH"
-            printf 'DASHBOARD_SESSION_SECRET=%s\n' "$DASHBOARD_SESSION_SECRET"
-          } > .hostinger.env
+          bash deploy/hostinger/write-env.sh > .hostinger.env
           target="$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST"
-          scp .hostinger.env "$target:$DEPLOY_DIR/.env.next"
+          bundle="$DEPLOY_DIR/incoming/$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
+          scp .hostinger.env "$target:$bundle/.env.next"
           rm -f .hostinger.env
-          printf '%s' "$GHCR_PULL_TOKEN" | ssh "$target" "docker login ghcr.io -u '$GITHUB_ACTOR' --password-stdin && cd '$DEPLOY_DIR' && ./deploy.sh; status=\$?; docker logout ghcr.io >/dev/null; exit \$status"
+          # Workflow IDs/paths expand locally; remote status variables stay escaped.
+          # shellcheck disable=SC2029
+          printf '%s' "$GHCR_PULL_TOKEN" | ssh "$target" "docker login ghcr.io -u '$GITHUB_ACTOR' --password-stdin && cd '$DEPLOY_DIR' && DEPLOY_SHA='$GITHUB_SHA' DEPLOY_RUN_ID='$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT' '$bundle/deploy.sh' --directory '$DEPLOY_DIR' --candidate-dir '$bundle'; status=\$?; docker logout ghcr.io >/dev/null; exit \$status"
+
+      - name: Collect sanitized deployment receipt
+        if: always() && steps.ssh.outcome == 'success'
+        env:
+          HOSTINGER_SSH_HOST: ${{ secrets.HOSTINGER_SSH_HOST }}
+          HOSTINGER_SSH_USER: ${{ secrets.HOSTINGER_SSH_USER }}
+        run: |
+          target="$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST"
+          scp "$target:$DEPLOY_DIR/receipt.json" receipt.download.json
+          python3 - <<'PYCODE'
+          import json, os, pathlib
+          path = pathlib.Path('receipt.download.json')
+          data = json.loads(path.read_text())
+          assert data['sha'] == os.environ['GITHUB_SHA'], 'Receipt belongs to another SHA'
+          assert data['workflow_run'] == os.environ['GITHUB_RUN_ID'] + '-' + os.environ['GITHUB_RUN_ATTEMPT'], 'Stale receipt'
+          path.rename('deployment-receipt.json')
+          PYCODE
+
+      - name: Publish deployment evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: staging-receipt-${{ github.sha }}-${{ github.run_attempt }}
+          path: deployment-receipt.json
+          if-no-files-found: ignore
+          retention-days: 30

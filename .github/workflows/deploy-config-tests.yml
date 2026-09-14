@@ -1,0 +1,25 @@
+name: Deployment configuration tests
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  deployment-config:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - name: Prepare deployment test runner
+        run: |
+          python3 -m venv .venv
+          .venv/bin/python -m pip install --disable-pip-version-check 'pytest==9.1.1'
+
+      - name: Test literal credentials and Docker recovery
+        env:
+          HERMES_DEPLOY_DOCKER_TESTS: '1'
+        run: scripts/run_tests.sh deploy/hostinger --file-timeout 600

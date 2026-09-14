@@ -52,7 +52,19 @@ def test_quickstart_refuses_when_nothing_fits(client, monkeypatch):
     assert "Local Models" in r.json()["detail"]
 
 
-def test_quickstart_runs_all_three_legs(client, monkeypatch, tmp_path):
+@pytest.fixture
+def ample_hardware(monkeypatch):
+    """Exercise setup sequencing independently of the host's GPU capacity."""
+    from hermes_cli.local_runtime.estimator import HardwareBudget
+
+    budget = HardwareBudget(usable_vram_bytes=64 << 30,
+                            total_device_bytes=64 << 30,
+                            ram_available_bytes=64 << 30)
+    monkeypatch.setattr("hermes_cli.local_runtime.hardware.probe_budget",
+                        lambda **kw: budget)
+
+
+def test_quickstart_runs_all_three_legs(client, monkeypatch, tmp_path, ample_hardware):
     """Fresh machine: install runtime -> download recommended -> activate.
     Each leg is asserted by its observable call, in order."""
     calls: list[str] = []
@@ -113,7 +125,7 @@ def test_quickstart_runs_all_three_legs(client, monkeypatch, tmp_path):
     assert load_config()["local_runtime"]["enabled"] is True
 
 
-def test_quickstart_skips_satisfied_legs(client, monkeypatch):
+def test_quickstart_skips_satisfied_legs(client, monkeypatch, ample_hardware):
     """Runtime present and model already staged: the response says so and
     the job goes straight to activation."""
     calls: list[str] = []
