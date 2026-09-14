@@ -17,6 +17,10 @@ class FakeWebglAddon {
 }
 
 class FakeTerminal {
+  static instances: FakeTerminal[] = [];
+  element: HTMLDivElement | null = null;
+  paste = vi.fn();
+  keyHandler: ((event: KeyboardEvent) => boolean) | null = null;
   options: Record<string, unknown>;
   rows = 24;
   cols = 80;
@@ -27,10 +31,11 @@ class FakeTerminal {
 
   constructor(options: Record<string, unknown>) {
     this.options = options;
+    FakeTerminal.instances.push(this);
   }
 
-  attachCustomKeyEventHandler() {
-    return true;
+  attachCustomKeyEventHandler(handler: (event: KeyboardEvent) => boolean) {
+    this.keyHandler = handler;
   }
 
   attachCustomWheelEventHandler() {
@@ -69,9 +74,10 @@ class FakeTerminal {
 
   scrollToBottom() {}
 
-  open() {}
-
-  paste() {}
+  open(host: HTMLElement) {
+    this.element = document.createElement("div");
+    host.append(this.element);
+  }
 
   refresh() {}
 
@@ -88,6 +94,11 @@ vi.mock("@xterm/addon-unicode11", () => ({ Unicode11Addon: class {} }));
 vi.mock("@xterm/addon-web-links", () => ({ WebLinksAddon: class {} }));
 vi.mock("@xterm/addon-webgl", () => ({ WebglAddon: FakeWebglAddon }));
 vi.mock("@xterm/xterm", () => ({ Terminal: FakeTerminal }));
+const uploadChatImage = vi.hoisted(() => vi.fn());
+vi.mock("@/lib/chatImagePaste", async (importOriginal) => ({
+  ...await importOriginal<typeof import("@/lib/chatImagePaste")>(),
+  uploadChatImage,
+}));
 vi.mock("@/components/ChatSidebar", () => ({
   ChatSidebar: () => null,
 }));
@@ -190,6 +201,9 @@ async function render(ui: ReactNode) {
 }
 
 beforeEach(() => {
+  FakeTerminal.instances = [];
+  uploadChatImage.mockReset();
+  uploadChatImage.mockResolvedValue({ path: "/synthetic/image.png" });
   FakeWebSocket.instances = [];
   maybeReloadForLoopbackWsAuthFailure.mockClear();
   apiMocks.buildWsUrl.mockReset();
@@ -255,6 +269,99 @@ afterEach(async () => {
 });
 
 describe("ChatPage", () => {
+  describe("DOM paste", () => {
+    beforeEach(async () => {
+      const { default: ChatPage } = await import("./ChatPage");
+      await render(
+        <MemoryRouter initialEntries={["/chat"]}>
+          <ChatPage isActive />
+        </MemoryRouter>,
+      );
+      await vi.waitFor(() => expect(FakeTerminal.instances).toHaveLength(1));
+    });
+
+    function pasteEvent(clipboardData: {
+      files: File[];
+      items: unknown[];
+      getData: (type: string) => string;
+    } | null) {
+      const term = FakeTerminal.instances[0];
+      const event = new Event("paste", { bubbles: true, cancelable: true });
+      Object.defineProperty(event, "clipboardData", { value: clipboardData });
+      const downstream = vi.fn();
+      term.element!.addEventListener("paste", downstream);
+      term.element!.dispatchEvent(event);
+      return { term, event, downstream };
+    }
+
+    it.each(["Safari text", "  first line\nsecond line\t "])(
+      "pastes original text once without the asynchronous clipboard: %j",
+      (text) => {
+        const readText = vi.mocked(navigator.clipboard.readText);
+        readText.mockRejectedValue(new Error("NotAllowedError"));
+        const getData = vi.fn(() => text);
+        const { term, event, downstream } = pasteEvent({ files: [], items: [], getData });
+        expect(getData).toHaveBeenCalledWith("text/plain");
+        expect(term.paste).toHaveBeenCalledExactlyOnceWith(text);
+        expect(readText).not.toHaveBeenCalled();
+        expect(event.defaultPrevented).toBe(true);
+        expect(downstream).not.toHaveBeenCalled();
+      },
+    );
+
+    it.each(["", " \n\t "])("does not consume unusable text %j", (text) => {
+      const { term, event, downstream } = pasteEvent({
+        files: [], items: [], getData: () => text,
+      });
+      expect(term.paste).not.toHaveBeenCalled();
+      expect(event.defaultPrevented).toBe(false);
+      expect(downstream).toHaveBeenCalledOnce();
+    });
+
+    it("leaves missing clipboard data alone", () => {
+      const { term, event, downstream } = pasteEvent(null);
+      expect(term.paste).not.toHaveBeenCalled();
+      expect(event.defaultPrevented).toBe(false);
+      expect(downstream).toHaveBeenCalledOnce();
+    });
+
+    it("leaves clipboard read failures alone", () => {
+      const { term, event, downstream } = pasteEvent({
+        files: [], items: [], getData: () => { throw new Error("unavailable"); },
+      });
+      expect(term.paste).not.toHaveBeenCalled();
+      expect(event.defaultPrevented).toBe(false);
+      expect(downstream).toHaveBeenCalledOnce();
+    });
+
+    it("uploads images without reading or pasting accompanying text", async () => {
+      const file = new File(["synthetic"], "clip.png", { type: "image/png" });
+      const getData = vi.fn(() => "not pasted");
+      await act(async () => {
+        const { term, event, downstream } = pasteEvent({ files: [file], items: [], getData });
+        expect(term.paste).not.toHaveBeenCalled();
+        expect(getData).not.toHaveBeenCalled();
+        expect(event.defaultPrevented).toBe(true);
+        expect(downstream).not.toHaveBeenCalled();
+        expect(uploadChatImage).toHaveBeenCalledExactlyOnceWith(file, "");
+      });
+    });
+
+    it("preserves the keyboard clipboard route and suppresses native paste", async () => {
+      const text = "keyboard text";
+      vi.mocked(navigator.clipboard.readText).mockResolvedValue(text);
+      const term = FakeTerminal.instances[0];
+      const event = new KeyboardEvent("keydown", {
+        key: "v", ctrlKey: true, metaKey: true, cancelable: true,
+      });
+      await act(async () => {
+        expect(term.keyHandler!(event)).toBe(false);
+      });
+      expect(event.defaultPrevented).toBe(true);
+      expect(term.paste).toHaveBeenCalledExactlyOnceWith(text);
+    });
+  });
+
   it("treats loopback 4401 closes as stale-token reload candidates", async () => {
     const { default: ChatPage } = await import("./ChatPage");
 

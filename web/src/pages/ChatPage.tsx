@@ -671,10 +671,24 @@ export default function ChatPage({ isActive = true }: { isActive?: boolean }) {
     };
     const handleBrowserPaste = (ev: ClipboardEvent) => {
       const files = imageFilesFromTransfer(ev.clipboardData);
-      if (!files.length) return;
+      if (files.length) {
+        ev.preventDefault();
+        ev.stopPropagation();
+        uploadAndAttachImages(files);
+        return;
+      }
+      // Safari can supply DOM clipboard data while denying the async API.
+      let text = "";
+      try {
+        text = ev.clipboardData?.getData("text/plain") ?? "";
+      } catch {
+        return;
+      }
+      if (!text.trim()) return;
       ev.preventDefault();
       ev.stopPropagation();
-      uploadAndAttachImages(files);
+      term.paste(text);
+      term.focus();
     };
     const handleBrowserDragOver = (ev: DragEvent) => {
       if (!transferMayContainImage(ev.dataTransfer)) return;
