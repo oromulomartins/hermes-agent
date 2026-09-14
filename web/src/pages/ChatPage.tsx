@@ -714,11 +714,8 @@ export default function ChatPage({ isActive = true }: { isActive?: boolean }) {
       // as SIGINT.
       // Paste: Cmd+Shift+V on macOS, Ctrl+Shift+V on others.
       const copyModifier = isMac ? ev.metaKey : ev.ctrlKey;
-      // Paste on BARE Ctrl+V too (not only Ctrl+Shift+V). Bare Ctrl+V otherwise
-      // falls through to the TUI, whose server-side clipboard read can't see the
-      // browser/OS clipboard → "No image found in clipboard". Routing Ctrl+V
-      // through the same navigator.clipboard path below makes it paste
-      // image-or-text correctly, like Ctrl+Shift+V.
+      // Bare Ctrl/Cmd+V uses the native paste event; Shift keeps the explicit
+      // async clipboard shortcut. Neither should forward the key to the TUI.
       const pasteModifier = isMac ? ev.metaKey : ev.ctrlKey;
 
       const terminalSelection = term.getSelection();
@@ -770,6 +767,9 @@ export default function ChatPage({ isActive = true }: { isActive?: boolean }) {
       }
 
       if (pasteModifier && ev.key.toLowerCase() === "v") {
+        // Returning false stops xterm key handling, but leaves the browser's
+        // native paste action intact even when async clipboard access is denied.
+        if (!ev.shiftKey) return false;
         // preventDefault suppresses the DOM paste event, so image paste must
         // be handled here via clipboard.read() — readText() alone misses
         // image-only clipboards (the Discord / #24860 failure mode).

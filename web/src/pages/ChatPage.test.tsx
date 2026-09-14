@@ -338,6 +338,11 @@ describe("ChatPage", () => {
       const file = new File(["synthetic"], "clip.png", { type: "image/png" });
       const getData = vi.fn(() => "not pasted");
       await act(async () => {
+        const key = new KeyboardEvent("keydown", {
+          key: "v", ctrlKey: true, metaKey: true, cancelable: true,
+        });
+        expect(FakeTerminal.instances[0].keyHandler!(key)).toBe(false);
+        expect(key.defaultPrevented).toBe(false);
         const { term, event, downstream } = pasteEvent({ files: [file], items: [], getData });
         expect(term.paste).not.toHaveBeenCalled();
         expect(getData).not.toHaveBeenCalled();
@@ -347,12 +352,34 @@ describe("ChatPage", () => {
       });
     });
 
-    it("preserves the keyboard clipboard route and suppresses native paste", async () => {
+    it.each([false, true])("allows native paste with async clipboard unavailable=%s", async (missing) => {
+      const readText = vi.fn().mockRejectedValue(new Error("NotAllowedError"));
+      const read = vi.fn().mockRejectedValue(new Error("NotAllowedError"));
+      Object.defineProperty(navigator, "clipboard", {
+        configurable: true,
+        value: missing ? undefined : { read, readText },
+      });
+      const term = FakeTerminal.instances[0];
+      const event = new KeyboardEvent("keydown", {
+        key: "v", ctrlKey: true, metaKey: true, cancelable: true,
+      });
+      expect(term.keyHandler!(event)).toBe(false);
+      expect(event.defaultPrevented).toBe(false);
+      const text = "  native text\nsecond line ";
+      const pasted = pasteEvent({ files: [], items: [], getData: () => text });
+      await act(async () => {});
+      expect(term.paste).toHaveBeenCalledExactlyOnceWith(text);
+      expect(pasted.downstream).not.toHaveBeenCalled();
+      expect(read).not.toHaveBeenCalled();
+      expect(readText).not.toHaveBeenCalled();
+    });
+
+    it("preserves the Shift keyboard clipboard route and suppresses native paste", async () => {
       const text = "keyboard text";
       vi.mocked(navigator.clipboard.readText).mockResolvedValue(text);
       const term = FakeTerminal.instances[0];
       const event = new KeyboardEvent("keydown", {
-        key: "v", ctrlKey: true, metaKey: true, cancelable: true,
+        key: "v", ctrlKey: true, metaKey: true, shiftKey: true, cancelable: true,
       });
       await act(async () => {
         expect(term.keyHandler!(event)).toBe(false);
