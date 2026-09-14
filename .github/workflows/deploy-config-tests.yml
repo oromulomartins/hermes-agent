@@ -11,8 +11,10 @@ permissions:
 jobs:
   deployment-config:
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
-      - name: Validate literal credentials with Docker Compose
+      - name: Test literal credentials and Docker recovery
+        env:
+          HERMES_DEPLOY_DOCKER_TESTS: '1'
         run: python3 -m unittest discover -s deploy/hostinger -p 'test_*.py' -v
