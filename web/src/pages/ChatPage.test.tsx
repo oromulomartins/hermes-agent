@@ -335,7 +335,8 @@ describe("ChatPage", () => {
     });
 
     it("uploads images without reading or pasting accompanying text", async () => {
-      const file = new File(["synthetic"], "clip.png", { type: "image/png" });
+      const file = new File(["synthetic"], "clip.png", { type: "image/png", lastModified: 1000 });
+      const itemFile = new File([file], file.name, { type: file.type, lastModified: 1001 });
       const getData = vi.fn(() => "not pasted");
       await act(async () => {
         const key = new KeyboardEvent("keydown", {
@@ -343,13 +344,18 @@ describe("ChatPage", () => {
         });
         expect(FakeTerminal.instances[0].keyHandler!(key)).toBe(false);
         expect(key.defaultPrevented).toBe(false);
-        const { term, event, downstream } = pasteEvent({ files: [file], items: [], getData });
+        const { term, event, downstream } = pasteEvent({
+          files: [file],
+          items: [{ kind: "file", type: file.type, getAsFile: () => itemFile }],
+          getData,
+        });
         expect(term.paste).not.toHaveBeenCalled();
         expect(getData).not.toHaveBeenCalled();
         expect(event.defaultPrevented).toBe(true);
         expect(downstream).not.toHaveBeenCalled();
-        expect(uploadChatImage).toHaveBeenCalledExactlyOnceWith(file, "");
+        await vi.waitFor(() => expect(uploadChatImage).toHaveBeenCalled());
       });
+      expect(uploadChatImage).toHaveBeenCalledExactlyOnceWith(file, "");
     });
 
     it.each([false, true])("allows native paste with async clipboard unavailable=%s", async (missing) => {
