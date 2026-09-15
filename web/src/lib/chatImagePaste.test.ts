@@ -73,9 +73,23 @@ describe("firstImageFromClipboard", () => {
 });
 
 describe("imageFilesFromTransfer", () => {
+  it.each(["files", "items"])("preserves distinct images with identical metadata via %s", (source) => {
+    const a = new File(["aaa"], "image.png", { type: "image/png", lastModified: 1000 });
+    const b = new File(["bbb"], "image.png", { type: "image/png", lastModified: 1000 });
+    const data = makeData(source === "files"
+      ? { files: [a, b] }
+      : { items: [makeItem("file", a.type, a), makeItem("file", b.type, b)] });
+    const images = imageFilesFromTransfer(data);
+    expect(images).toHaveLength(2);
+    expect(images[0]).toBe(a);
+    expect(images[1]).toBe(b);
+  });
+
   it("dedupes the same file when present in both items and files", () => {
     const data = makeData({
-      items: [makeItem("file", "image/png", png)],
+      items: [makeItem("file", "image/png", new File([png], png.name, {
+        type: png.type, lastModified: png.lastModified + 1,
+      }))],
       files: [png, gif],
     });
     expect(imageFilesFromTransfer(data)).toEqual([png, gif]);

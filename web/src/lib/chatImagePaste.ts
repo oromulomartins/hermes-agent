@@ -24,41 +24,23 @@ export interface ChatImageUploadResult {
   mime_type: string;
 }
 
-function imageFileKey(file: File): string {
-  return `${file.name}\0${file.type}\0${file.size}\0${file.lastModified}`;
-}
-
-function addImageFile(files: File[], seen: Set<string>, file: File | null) {
-  if (!file || !file.type.startsWith("image/")) return;
-  const key = imageFileKey(file);
-  if (seen.has(key)) return;
-  seen.add(key);
-  files.push(file);
-}
-
 /** Pull every image file out of a DataTransfer (clipboard or drop). */
 export function imageFilesFromTransfer(
   data: DataTransfer | null,
 ): File[] {
   if (!data) return [];
-  const files: File[] = [];
-  const seen = new Set<string>();
+  // FileList and items describe the same transfer. Combining them duplicates
+  // clipboard images when getAsFile() assigns a different lastModified value.
+  const files = Array.from(data.files ?? []).filter((file) =>
+    file.type.startsWith("image/"),
+  );
+  if (files.length) return files;
 
-  if (data.items?.length) {
-    for (let i = 0; i < data.items.length; i++) {
-      const item = data.items[i];
-      if (item.kind === "file" && item.type.startsWith("image/")) {
-        addImageFile(files, seen, item.getAsFile());
-      }
-    }
+  for (const item of Array.from(data.items ?? [])) {
+    if (item.kind !== "file") continue;
+    const file = item.getAsFile();
+    if (file?.type.startsWith("image/")) files.push(file);
   }
-
-  if (data.files?.length) {
-    for (let i = 0; i < data.files.length; i++) {
-      addImageFile(files, seen, data.files[i]);
-    }
-  }
-
   return files;
 }
 
