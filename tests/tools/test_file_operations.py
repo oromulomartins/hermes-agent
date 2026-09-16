@@ -1,6 +1,7 @@
 """Tests for tools/file_operations.py — deny list, result dataclasses, helpers."""
 
 import os
+import shutil
 import pytest
 import subprocess
 from pathlib import Path
@@ -247,7 +248,8 @@ def file_ops(mock_env):
     return ShellFileOperations(mock_env)
 
 
-def make_real_subprocess_env(cwd: str, include_stderr: bool = False) -> MagicMock:
+def make_real_subprocess_env(cwd: str, include_stderr: bool = False,
+                             shell: str | None = None) -> MagicMock:
     """Mock env whose execute() runs the command in a real subprocess.
 
     For tests that need the generated shell scripts to actually run
@@ -266,9 +268,11 @@ def make_real_subprocess_env(cwd: str, include_stderr: bool = False) -> MagicMoc
             # Match LocalEnvironment: commands are POSIX scripts executed by
             # Git Bash, and stdin bytes must bypass Windows newline rewriting.
             command = [_find_bash(), "-c", command]
+        elif shell:
+            command = [shell, "-c", command]
         completed = subprocess.run(
             command,
-            shell=not is_windows,
+            shell=not is_windows and shell is None,
             text=not is_windows,
             capture_output=True,
             input=(stdin_data.encode("utf-8", "surrogateescape")
@@ -605,6 +609,53 @@ class _DeletedTestGitBaselineCheck:
 # =========================================================================
 # Atomic write: umask-default permissions for new files
 # =========================================================================
+
+@pytest.mark.linux_only
+class TestAtomicWriteFailureCleanup:
+    """Real-shell regressions adapted from KoNit-K/why-evolving (#110177/#110180)."""
+
+    @pytest.fixture(params=["bash", "dash"])
+    def shell_ops(self, request, tmp_path):
+        shell = shutil.which(request.param)
+        if shell is None:
+            pytest.skip(f"{request.param} is not installed")
+        return ShellFileOperations(make_real_subprocess_env(
+            str(tmp_path), include_stderr=True, shell=shell,
+        ))
+
+    @pytest.mark.parametrize("operation", ["write_file", "patch_replace"])
+    def test_failed_swap_removes_only_own_temp(self, shell_ops, tmp_path, monkeypatch, operation):
+        directory = tmp_path / "space 'single' and \"double\""
+        directory.mkdir()
+        target = directory / "target.txt"
+        target.write_bytes(b"original\n")
+        other_temp = directory / ".hermes-tmp.other-operation"
+        other_temp.write_bytes(b"other operation\n")
+        shim_dir = tmp_path / "bin"
+        shim_dir.mkdir()
+        shim = shim_dir / "mv"
+        shim.write_text("#!/bin/sh\necho 'injected mv failure' >&2\nexit 1\n")
+        shim.chmod(0o755)
+        monkeypatch.setenv("PATH", f"{shim_dir}{os.pathsep}{os.environ['PATH']}")
+
+        if operation == "write_file":
+            result = shell_ops.write_file(str(target), "replacement\n")
+        else:
+            result = shell_ops.patch_replace(str(target), "original", "replacement")
+
+        assert result.error is not None
+        assert "injected mv failure" in result.error
+        assert target.read_bytes() == b"original\n"
+        assert other_temp.read_bytes() == b"other operation\n"
+        assert list(directory.glob(".hermes-tmp.*")) == [other_temp]
+
+    def test_overlong_destination_removes_temp(self, shell_ops, tmp_path):
+        target = tmp_path / ("a" * (os.pathconf(tmp_path, "PC_NAME_MAX") + 1))
+        result = shell_ops.write_file(str(target), "replacement\n")
+        assert result.error is not None
+        assert "File name too long" in result.error
+        assert not list(tmp_path.glob(".hermes-tmp.*"))
+
 
 class TestAtomicWriteNewFilePermissions:
     """_atomic_write should apply umask-default perms to new files (not 0600)."""
